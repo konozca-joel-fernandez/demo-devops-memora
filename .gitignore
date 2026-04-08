@@ -1,0 +1,14 @@
+# Dependencias (lo que suele pesar miles de archivos)
+node_modules/
+.sfdx/
+.sf/
+.local/
+
+# Configuración de editor
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Logs y temporales
+*.log
+.tmp/
