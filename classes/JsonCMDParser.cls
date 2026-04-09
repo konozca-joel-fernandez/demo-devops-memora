@@ -15,6 +15,7 @@
 *Version Date       Author          Modification
 * 01   2025-11-03  Joel Macías      Creación del archivo
 * 02   2026-02-09  Manu Escudé      Ajustes en lógica de comparación y logging de errores
+* 03   2026-04-09  Joel Fernández   Test Demo DevOps
 * ===================================================================================================================
 */
 public with sharing class JsonCMDParser {
