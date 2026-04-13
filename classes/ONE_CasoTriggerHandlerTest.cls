@@ -70,4 +70,24 @@ private class ONE_CasoTriggerHandlerTest {
 
         Test.stopTest();
     }
+
+    @isTest
+    private static void updateCaso3() {
+
+        Test.startTest();
+
+        Account difunto = [SELECT Id FROM Account WHERE LastName = 'Pepe' LIMIT 1];
+        Account tanatorio = [SELECT Id FROM Account WHERE Name = 'Centro' LIMIT 1];
+
+        ONE_Caso__c caso = new ONE_Caso__c(RecordTypeId = ONE_CommonUtils.getsObjectRecordTypeIdByName('ONE_Caso__c', 'ONE_Avisos_De_Defuncion'), ONE_Centro_del_Servicio__c = tanatorio.Id, ONE_Difunto__c = difunto.Id);
+        insert caso;
+
+        ONE_Expediente__c expediente = ONE_TestDataFactory.FuncionTest3(new ONE_Expediente__c(ONE_Difunto__c = difunto.Id, ONE_Centro_Del_Expediente__c = tanatorio.Id), true);
+
+        caso.ONE_Expediente__c = expediente.Id;
+
+        update caso;
+
+        Test.stopTest();
+    }
 }
