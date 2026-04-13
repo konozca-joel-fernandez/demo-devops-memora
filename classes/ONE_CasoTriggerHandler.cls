@@ -13,6 +13,11 @@ public without sharing class ONE_CasoTriggerHandler extends TriggerHandler {
         ONE_CasoHelper.FuncionTest2(Trigger.new);
     }
 
+    public override void beforeUpdate() {
+
+        ONE_CasoHelper.FuncionTest4(Trigger.new);
+    }
+
     public override void afterUpdate() {
 
         ONE_CasoHelper.FuncionTest3((Map<Id, ONE_Caso__c>)Trigger.oldMap, (Map<Id, ONE_Caso__c>)Trigger.newMap);
