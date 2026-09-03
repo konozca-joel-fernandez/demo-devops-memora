@@ -1,0 +1,77 @@
+name: Salesforce Code Analyzer
+
+# Se ejecuta antes del merge cuando se crea o actualiza
+# una Pull Request cuyo destino es dev.
+on:
+  pull_request:
+    branches:
+      - dev
+
+permissions:
+  contents: read
+  pull-requests: write
+  actions: read
+
+jobs:
+  code-analyzer:
+    name: Salesforce Code Analyzer
+
+    # Solo aplica a PRs cuya rama origen sea feature/*
+    if: startsWith(github.head_ref, 'feature/')
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+      # Obtener el código de la PR
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Instalar Node
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # Instalar Java para PMD
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # Instalar Python para Flow Scanner
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # Instalar Salesforce CLI
+      - name: Install Salesforce CLI
+        run: npm install --global @salesforce/cli
+
+      # Instalar Salesforce Code Analyzer
+      - name: Install Salesforce Code Analyzer
+        run: sf plugins install code-analyzer
+
+      # Ejecutar Code Analyzer
+      - name: Run Salesforce Code Analyzer
+        id: run-code-analyzer
+        uses: forcedotcom/run-code-analyzer@v2
+        with:
+          run-arguments: >-
+            --workspace force-app
+            --view detail
+            --severity-threshold 2
+            --output-file code-analyzer-results.html
+          results-artifact-name: code-analyzer-results
+          github-token: ${{ github.token }}
+
+      # Quality Gate:
+      # bloquear el merge si los archivos modificados
+      # contienen incidencias Critical o High.
+      - name: Check Code Analyzer results
+        if: |
+          steps.run-code-analyzer.outputs.num-sev1-violations-in-changed-files > 0 ||
+          steps.run-code-analyzer.outputs.num-sev2-violations-in-changed-files > 0
+        run: exit 1
