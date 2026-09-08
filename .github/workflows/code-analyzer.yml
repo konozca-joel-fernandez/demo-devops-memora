@@ -143,118 +143,133 @@ jobs:
           '
 
   validate-deployment:
-    name: 2. Validación de Despliegue y Tests Apex
-    runs-on: ubuntu-latest
+        name: 2. Validación de Despliegue y Tests Apex
+        runs-on: ubuntu-latest
 
-    steps:
-      - name: Checkout del repositorio
-        uses: actions/checkout@v4
+        steps:
+          # 1. ACTUALIZACIÓN: fetch-depth: 0 es necesario para poder comparar ramas con git diff
+          - name: Checkout del repositorio
+            uses: actions/checkout@v4
+            with:
+              fetch-depth: 0 
 
-      - name: Instalar Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
+          - name: Instalar Node.js
+            uses: actions/setup-node@v4
+            with:
+              node-version: '22'
 
-      - name: Instalar Salesforce CLI
-        run: npm install --global @salesforce/cli
+          - name: Instalar Salesforce CLI
+            run: npm install --global @salesforce/cli
 
-      - name: Reconstruir llave privada (server.key)
-        run: echo "${{ secrets.SF_DEV_SERVER_KEY }}" > server.key
+          - name: Reconstruir llave privada (server.key)
+            run: echo "${{ secrets.SF_DEV_SERVER_KEY }}" > server.key
 
-      - name: Autenticación en Salesforce (Dev)
-        run: sf org login jwt --client-id ${{ secrets.SF_DEV_CLIENT_ID }} --jwt-key-file server.key --username ${{ secrets.SF_DEV_USERNAME }} --set-default --alias dev-org --instance-url https://login.salesforce.com
+          - name: Autenticación en Salesforce (Dev)
+            run: sf org login jwt --client-id ${{ secrets.SF_DEV_CLIENT_ID }} --jwt-key-file server.key --username ${{ secrets.SF_DEV_USERNAME }} --set-default --alias dev-org --instance-url https://login.salesforce.com
 
-      - name: Eliminar llave privada por seguridad
-        if: always()
-        run: rm -f server.key
+          - name: Eliminar llave privada por seguridad
+            if: always()
+            run: rm -f server.key
 
-      - name: Validar Metadatos y Ejecutar Tests (Dry-Run)
-        run: |
-          if [ -f "tests_to_run.txt" ] && [ -s "tests_to_run.txt" ]; then
-            TESTS=$(cat tests_to_run.txt | tr '\r\n' ' ' | xargs)
-            echo "🧪 Validando cambios y ejecutando tests especificados: $TESTS"
-            sf project deploy validate --target-org dev-org --source-dir force-app --test-level RunSpecifiedTests --tests $TESTS --json > deploy-result.json || true
-          else
-            echo "⚠️ No se encontraron tests en tests_to_run.txt. Validando solo compilación de metadatos..."
-            sf project deploy validate --target-org dev-org --source-dir force-app --test-level NoTestsRun --json > deploy-result.json || true
-          fi
+          # 2. ACTUALIZACIÓN: Comprobar cambios en Apex antes de lanzar tests
+          - name: Validar Metadatos y Ejecutar Tests (Dry-Run)
+            run: |
+              # Comparamos la rama origen con la rama destino (dev) buscando archivos .cls o .trigger
+              APEX_CHANGED=$(git diff --name-only origin/${{ github.base_ref }}...HEAD | grep -iE '\.cls$|\.trigger$' || true)
 
-      - name: Procesar Resumen de Validación y Tests
-        if: always()
-        run: |
-          node -e '
-            const fs = require("fs");
-            let summary = "## 🧪 Resultado de Validación en Salesforce\n\n";
+              if [ -n "$APEX_CHANGED" ]; then
+                echo "🔄 Cambios detectados en código Apex:"
+                echo "$APEX_CHANGED"
+                
+                if [ -f "tests_to_run.txt" ] && [ -s "tests_to_run.txt" ]; then
+                  TESTS=$(cat tests_to_run.txt | tr '\r\n' ' ' | xargs)
+                  echo "🧪 Validando cambios y ejecutando tests especificados: $TESTS"
+                  sf project deploy validate --target-org dev-org --source-dir force-app --test-level RunSpecifiedTests --tests $TESTS --json > deploy-result.json || true
+                else
+                  echo "⚠️ Hay cambios en Apex pero tests_to_run.txt está vacío. Validando sin tests (NoTestsRun)."
+                  sf project deploy validate --target-org dev-org --source-dir force-app --test-level NoTestsRun --json > deploy-result.json || true
+                fi
+              else
+                echo "⏭️ No se han detectado cambios en código Apex. Saltando la ejecución de unit tests."
+                echo "📦 Validando únicamente el despliegue de metadatos (NoTestsRun)..."
+                sf project deploy validate --target-org dev-org --source-dir force-app --test-level NoTestsRun --json > deploy-result.json || true
+              fi
 
-            if (!fs.existsSync("deploy-result.json")) {
-              summary += "❌ **Error Crítico:** No se pudo generar el archivo de resultados de la CLI de Salesforce.\n";
-              fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary);
-              process.exit(1);
-            }
+          - name: Procesar Resumen de Validación y Tests
+            if: always()
+            run: |
+              # (Deja aquí exactamente el mismo bloque de Node.js que procesa el JSON que ya teníamos)
+              node -e '
+                const fs = require("fs");
+                let summary = "## 🧪 Resultado de Validación en Salesforce\n\n";
 
-            let rawData;
-            try {
-              rawData = JSON.parse(fs.readFileSync("deploy-result.json", "utf8"));
-            } catch(e) {
-              summary += "❌ **Error:** No se pudo procesar la respuesta JSON de Salesforce.\n";
-              fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary);
-              process.exit(1);
-            }
+                if (!fs.existsSync("deploy-result.json")) {
+                  summary += "❌ **Error Crítico:** No se pudo generar el archivo de resultados de la CLI de Salesforce.\n";
+                  fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary);
+                  process.exit(1);
+                }
 
-            const status = rawData.status;
-            const res = rawData.result || {};
-            const details = res.details || res;
+                let rawData;
+                try {
+                  rawData = JSON.parse(fs.readFileSync("deploy-result.json", "utf8"));
+                } catch(e) {
+                  summary += "❌ **Error:** No se pudo procesar la respuesta JSON de Salesforce.\n";
+                  fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary);
+                  process.exit(1);
+                }
 
-            const compFailures = details.componentFailures ? (Array.isArray(details.componentFailures) ? details.componentFailures : [details.componentFailures]) : [];
-            let testFailures = [];
-            if (details.runTestResult && details.runTestResult.failures) {
-              testFailures = Array.isArray(details.runTestResult.failures) ? details.runTestResult.failures : [details.runTestResult.failures];
-            }
+                const status = rawData.status;
+                const res = rawData.result || {};
+                const details = res.details || res;
 
-            let hasErrors = false;
+                const compFailures = details.componentFailures ? (Array.isArray(details.componentFailures) ? details.componentFailures : [details.componentFailures]) : [];
+                let testFailures = [];
+                if (details.runTestResult && details.runTestResult.failures) {
+                  testFailures = Array.isArray(details.runTestResult.failures) ? details.runTestResult.failures : [details.runTestResult.failures];
+                }
 
-            if (status === 0 && compFailures.length === 0 && testFailures.length === 0) {
-              summary += "✅ **¡Validación y Tests completados con éxito en Salesforce!**\n";
-            } else {
-              hasErrors = true;
+                let hasErrors = false;
 
-              // 1. Captura de errores globales/previos de la CLI (Ej: Clase no encontrada, org no alcanzable)
-              if (rawData.message || rawData.errorMessage || (compFailures.length === 0 && testFailures.length === 0)) {
-                const topError = rawData.message || rawData.errorMessage || res.message || "Error general de despliegue o parámetro no válido.";
-                summary += `### 🛑 Error General de Despliegue / CLI\n`;
-                summary += `> **Detalle del fallo:** ${topError}\n\n`;
-              }
+                if (status === 0 && compFailures.length === 0 && testFailures.length === 0) {
+                  summary += "✅ **¡Validación y/o Tests completados con éxito en Salesforce!**\n";
+                } else {
+                  hasErrors = true;
 
-              // 2. Errores de compilación o sintaxis en metadatos
-              if (compFailures.length > 0) {
-                summary += `### ❌ Errores de Compilación / Metadatos (${compFailures.length})\n`;
-                summary += "| Archivo / Componente | Línea | Tipo | Problema |\n";
-                summary += "| :--- | :--- | :--- | :--- |\n";
-                compFailures.forEach(f => {
-                  const file = f.fileName || f.fullName || "N/A";
-                  const line = f.lineNumber || "-";
-                  const type = f.problemType || "Error";
-                  const prob = (f.problem || "").replace(/\n/g, "<br>");
-                  summary += `| \`${file}\` | ${line} | ${type} | ${prob} |\n`;
-                });
-                summary += "\n---\n\n";
-              }
+                  if (rawData.message || rawData.errorMessage || (compFailures.length === 0 && testFailures.length === 0)) {
+                    const topError = rawData.message || rawData.errorMessage || res.message || "Error general de despliegue o parámetro no válido.";
+                    summary += `### 🛑 Error General de Despliegue / CLI\n`;
+                    summary += `> **Detalle del fallo:** ${topError}\n\n`;
+                  }
 
-              // 3. Errores de aserción o fallos en Tests Apex
-              if (testFailures.length > 0) {
-                summary += `### 💥 Errores en Tests Apex (${testFailures.length})\n`;
-                summary += "| Clase Test | Método | Mensaje de Error |\n";
-                summary += "| :--- | :--- | :--- |\n";
-                testFailures.forEach(t => {
-                  const cls = t.name || "N/A";
-                  const method = t.methodName || "N/A";
-                  const msg = (t.message || "").replace(/\n/g, "<br>");
-                  summary += `| \`${cls}\` | \`${method}\` | ${msg} |\n`;
-                });
-              }
-            }
+                  if (compFailures.length > 0) {
+                    summary += `### ❌ Errores de Compilación / Metadatos (${compFailures.length})\n`;
+                    summary += "| Archivo / Componente | Línea | Tipo | Problema |\n";
+                    summary += "| :--- | :--- | :--- | :--- |\n";
+                    compFailures.forEach(f => {
+                      const file = f.fileName || f.fullName || "N/A";
+                      const line = f.lineNumber || "-";
+                      const type = f.problemType || "Error";
+                      const prob = (f.problem || "").replace(/\n/g, "<br>");
+                      summary += `| \`${file}\` | ${line} | ${type} | ${prob} |\n`;
+                    });
+                    summary += "\n---\n\n";
+                  }
 
-            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary);
+                  if (testFailures.length > 0) {
+                    summary += `### 💥 Errores en Tests Apex (${testFailures.length})\n`;
+                    summary += "| Clase Test | Método | Mensaje de Error |\n";
+                    summary += "| :--- | :--- | :--- |\n";
+                    testFailures.forEach(t => {
+                      const cls = t.name || "N/A";
+                      const method = t.methodName || "N/A";
+                      const msg = (t.message || "").replace(/\n/g, "<br>");
+                      summary += `| \`${cls}\` | \`${method}\` | ${msg} |\n`;
+                    });
+                  }
+                }
 
-            if (hasErrors) process.exit(1);
+                fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary);
+
+                if (hasErrors) process.exit(1);
+              '
           '
