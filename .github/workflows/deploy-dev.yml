@@ -1,0 +1,36 @@
+name: CD - Despliegue a Dev
+
+# Se ejecuta automáticamente al hacer MERGE o PUSH directo a la rama 'dev'
+on:
+  push:
+    branches:
+      - dev
+    paths:
+      - 'force-app/**' # Solo despliega si hay cambios en los metadatos
+
+jobs:
+  deploy-dev:
+    name: Despliegue en Entorno Dev
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout del repositorio
+        uses: actions/checkout@v4
+
+      - name: Instalar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Instalar Salesforce CLI
+        run: npm install --global @salesforce/cli
+
+      - name: Reconstruir llave privada (server.key)
+        run: echo "${{ secrets.SF_DEV_SERVER_KEY }}" > server.key
+
+      - name: Autenticación en Salesforce (Dev)
+        # Nota: Usamos login.salesforce.com porque es Trailhead. En el proyecto real será test.salesforce.com
+        run: sf org login jwt --client-id ${{ secrets.SF_DEV_CLIENT_ID }} --jwt-key-file server.key --username ${{ secrets.SF_DEV_USERNAME }} --set-default --alias dev-org --instance-url https://login.salesforce.com
+
+      - name: Desplegar metadatos a Salesforce
+        run: sf project deploy start --target-org dev-org --ignore-conflicts
