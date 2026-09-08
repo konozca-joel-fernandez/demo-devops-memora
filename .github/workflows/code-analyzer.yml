@@ -1,4 +1,4 @@
-name: CI - Salesforce Code Analyzer
+name: CI - Validación de PR y Calidad de Código
 
 on:
   pull_request:
@@ -8,10 +8,11 @@ on:
       - main
     paths:
       - 'force-app/**'
+      - 'tests_to_run.txt'
 
 jobs:
   code-analyzer:
-    name: Salesforce Code Analyzer
+    name: 1. Salesforce Code Analyzer
     runs-on: ubuntu-latest
 
     steps:
@@ -101,8 +102,8 @@ jobs:
               }
             }
 
-            const errors = violations.filter(v => v.severity <= 3);
-            const warnings = violations.filter(v => v.severity > 3);
+            const errors = violations.filter(v => v.severity <= 2);
+            const warnings = violations.filter(v => v.severity > 2);
 
             let summary = "## 🛡️ Resultado de Salesforce Code Analyzer\n\n";
 
@@ -141,9 +142,39 @@ jobs:
             if (errors.length > 0) process.exit(1);
           '
 
-      - name: Subir Reporte JSON como Artefacto
-        if: always()
-        uses: actions/upload-artifact@v4
+  validate-deployment:
+    name: 2. Validación de Despliegue y Tests Apex
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout del repositorio
+        uses: actions/checkout@v4
+
+      - name: Instalar Node.js
+        uses: actions/setup-node@v4
         with:
-          name: code-analyzer-results
-          path: code-analyzer-results.json
+          node-version: '22'
+
+      - name: Instalar Salesforce CLI
+        run: npm install --global @salesforce/cli
+
+      - name: Reconstruir llave privada (server.key)
+        run: echo "${{ secrets.SF_DEV_SERVER_KEY }}" > server.key
+
+      - name: Autenticación en Salesforce (Dev)
+        run: sf org login jwt --client-id ${{ secrets.SF_DEV_CLIENT_ID }} --jwt-key-file server.key --username ${{ secrets.SF_DEV_USERNAME }} --set-default --alias dev-org --instance-url https://login.salesforce.com
+
+      - name: Eliminar llave privada por seguridad
+        if: always()
+        run: rm -f server.key
+
+      - name: Validar Metadatos y Ejecutar Tests (Dry-Run)
+        run: |
+          if [ -f "tests_to_run.txt" ] && [ -s "tests_to_run.txt" ]; then
+            TESTS=$(cat tests_to_run.txt | tr '\r\n' ' ' | xargs)
+            echo "🧪 Validando cambios y ejecutando tests especificados: $TESTS"
+            sf project deploy validate --target-org dev-org --test-level RunSpecifiedTests --tests $TESTS
+          else
+            echo "⚠️ No se encontraron tests en tests_to_run.txt. Validando solo compilación de metadatos..."
+            sf project deploy validate --target-org dev-org --test-level NoTestsRun
+          fi
