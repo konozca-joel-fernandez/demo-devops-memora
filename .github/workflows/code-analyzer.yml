@@ -18,6 +18,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -33,7 +35,23 @@ jobs:
       - name: Ejecutar Salesforce Code Analyzer
         continue-on-error: true
         run: |
-          sf code-analyzer run --workspace force-app --severity-threshold 2 --output-file code-analyzer-results.json
+          # 1. Buscamos archivos Añadidos (A) o Modificados (M) ignorando los borrados
+          # y filtramos solo por las extensiones que lee el Code Analyzer
+          CHANGED_FILES=$(git diff --name-only --diff-filter=AM origin/${{ github.base_ref }}...HEAD | grep -iE '\.(cls|trigger|js|ts|html|page|cmp)$' || true)
+
+          if [ -z "$CHANGED_FILES" ]; then
+            echo "⏭️ No se han modificado archivos analizables en esta PR. Saltando el escaneo."
+            # Creamos un JSON vacío para que el script de Node no falle
+            echo '[]' > code-analyzer-results.json
+          else
+            # 2. Convertimos la lista de archivos en un texto separado por comas
+            TARGETS=$(echo "$CHANGED_FILES" | tr '\n' ',' | sed 's/,$//')
+            echo "🔍 Analizando únicamente los siguientes archivos:"
+            echo "$TARGETS"
+            
+            # 3. Lanzamos el Analyzer SOLO contra los archivos modificados (--target)
+            sf code-analyzer run --target "$TARGETS" --severity-threshold 2 --output-file code-analyzer-results.json
+          fi
 
       - name: Procesar Resumen de Calidad
         if: always()
