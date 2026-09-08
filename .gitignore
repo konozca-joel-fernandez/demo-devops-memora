@@ -1,98 +1,48 @@
-# ============================================================
-# SALESFORCE CLI
-# ============================================================
+# This file is used for Git repositories to specify intentionally untracked files that Git should ignore. 
+# If you are not using git, you can delete this file. For more information see: https://git-scm.com/docs/gitignore
+# For useful gitignore templates see: https://github.com/github/gitignore
 
-.sfdx/
+# Salesforce cache
 .sf/
+.sfdx/
 .localdevserver/
+deploy-options.json
 
+# LWC VSCode autocomplete
+**/lwc/jsconfig.json
 
-# ============================================================
-# NODE / NPM
-# ============================================================
+# LWC Jest coverage reports
+coverage/
 
-node_modules/
-
+# Logs
+logs
+*.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-pnpm-debug.log*
 
+# Dependency directories
+node_modules/
 
-# ============================================================
-# CREDENTIALS / LOCAL ENVIRONMENT
-# ============================================================
+# ApexPMD cache
+.pmdCache
 
-.env
-.env.*
-!.env.example
+# Eslint cache
+.eslintcache
 
-*.key
-*.pem
-*.p12
-*.pfx
-
-auth/
-
-
-# ============================================================
-# LOGS
-# ============================================================
-
-*.log
-logs/
-
-
-# ============================================================
-# TEST / COVERAGE
-# ============================================================
-
-coverage/
-.nyc_output/
-test-results/
-
-
-# ============================================================
-# TEMPORARY FILES
-# ============================================================
-
-*.tmp
-*.temp
-*.swp
-*.swo
-*~
-.cache/
-temp/
-tmp/
-
-
-# ============================================================
-# OPERATING SYSTEM
-# ============================================================
-
+# MacOS system files
 .DS_Store
+
+# Windows system files
 Thumbs.db
-Desktop.ini
+ehthumbs.db
+[Dd]esktop.ini
+$RECYCLE.BIN/
 
+# Local environment variables
+.env
 
-# ============================================================
-# IDE
-# ============================================================
-
-# VS Code
-.vscode/*
-!.vscode/extensions.json
-!.vscode/settings.json
-!.vscode/launch.json
-
-# JetBrains
-.idea/
-*.iml
-
-
-# ============================================================
-# BUILD
-# ============================================================
-
-dist/
-build/
+# Python Salesforce Functions
+**/__pycache__/
+**/.venv/
+**/venv/
