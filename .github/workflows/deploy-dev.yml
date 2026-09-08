@@ -16,6 +16,8 @@ jobs:
     steps:
       - name: Checkout del repositorio
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Instalar Node.js
         uses: actions/setup-node@v4
@@ -31,15 +33,89 @@ jobs:
       - name: Autenticación en Salesforce (Dev)
         run: sf org login jwt --client-id ${{ secrets.SF_DEV_CLIENT_ID }} --jwt-key-file server.key --username ${{ secrets.SF_DEV_USERNAME }} --set-default --alias dev-org --instance-url https://login.salesforce.com
 
+      - name: Eliminar llave privada por seguridad
+        if: always()
+        run: rm -f server.key
+
       - name: Desplegar metadatos y ejecutar Tests
         run: |
-          # Verificar si el archivo existe y no está vacío
-          if [ -f "tests_to_run.txt" ] && [ -s "tests_to_run.txt" ]; then
-            # Convertir el contenido del archivo en una lista separada por espacios
-            TESTS=$(cat tests_to_run.txt | tr '\r\n' ' ' | xargs)
-            echo "🚀 Ejecutando tests específicos: $TESTS"
-            sf project deploy start --target-org dev-org --test-level RunSpecifiedTests --tests $TESTS --ignore-conflicts
+          # Comprobamos los archivos modificados en el último commit/merge
+          APEX_CHANGED=$(git diff --name-only HEAD~1 HEAD | grep -iE '\.cls$|\.trigger$' || true)
+
+          if [ -n "$APEX_CHANGED" ]; then
+            echo "🔄 Cambios detectados en código Apex:"
+            echo "$APEX_CHANGED"
+            
+            if [ -f "tests_to_run.txt" ] && [ -s "tests_to_run.txt" ]; then
+              TESTS=$(cat tests_to_run.txt | tr '\r\n' ' ' | xargs)
+              echo "🚀 Desplegando y ejecutando tests especificados: $TESTS"
+              sf project deploy start --target-org dev-org --source-dir force-app --test-level RunSpecifiedTests --tests $TESTS --ignore-conflicts --json > deploy-result.json || true
+            else
+              echo "⚠️ Hay cambios en Apex pero tests_to_run.txt está vacío. Desplegando sin tests..."
+              sf project deploy start --target-org dev-org --source-dir force-app --ignore-conflicts --json > deploy-result.json || true
+            fi
           else
-            echo "⚠️ No se especificaron tests en tests_to_run.txt. Desplegando sin tests."
-            sf project deploy start --target-org dev-org --ignore-conflicts
+            echo "⏭️ No se han detectado cambios en código Apex. Desplegando metadatos sin ejecutar tests..."
+            sf project deploy start --target-org dev-org --source-dir force-app --ignore-conflicts --json > deploy-result.json || true
           fi
+
+      - name: Procesar Resumen de Despliegue
+        if: always()
+        run: |
+          node -e '
+            const fs = require("fs");
+            let summary = "## 🚀 Resultado del Despliegue a Dev\n\n";
+
+            if (!fs.existsSync("deploy-result.json")) {
+              summary += "❌ **Error Crítico:** No se pudo generar el archivo de resultados del despliegue.\n";
+              fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary);
+              process.exit(1);
+            }
+
+            let rawData;
+            try {
+              rawData = JSON.parse(fs.readFileSync("deploy-result.json", "utf8"));
+            } catch(e) {
+              summary += "❌ **Error:** No se pudo procesar la respuesta JSON de Salesforce.\n";
+              fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary);
+              process.exit(1);
+            }
+
+            const status = rawData.status;
+            const res = rawData.result || {};
+            const details = res.details || res;
+
+            const compFailures = details.componentFailures ? (Array.isArray(details.componentFailures) ? details.componentFailures : [details.componentFailures]) : [];
+            let testFailures = [];
+            if (details.runTestResult && details.runTestResult.failures) {
+              testFailures = Array.isArray(details.runTestResult.failures) ? details.runTestResult.failures : [details.runTestResult.failures];
+            }
+
+            if (status === 0 && compFailures.length === 0 && testFailures.length === 0) {
+              summary += "✅ **¡Despliegue guardado con éxito en la Org de Dev!**\n";
+            } else {
+              summary += "🛑 **El despliegue ha fallado en la Org:**\n\n";
+
+              if (compFailures.length > 0) {
+                summary += `### ❌ Errores de Componentes (${compFailures.length})\n`;
+                summary += "| Archivo | Tipo | Problema |\n| :--- | :--- | :--- |\n";
+                compFailures.forEach(f => {
+                  summary += `| \`${f.fileName || f.fullName}\` | ${f.problemType || "Error"} | ${(f.problem || "").replace(/\n/g, "<br>")} |\n`;
+                });
+              }
+
+              if (testFailures.length > 0) {
+                summary += `\n### 💥 Tests Fallidos (${testFailures.length})\n`;
+                summary += "| Clase Test | Método | Error |\n| :--- | :--- | :--- |\n";
+                testFailures.forEach(t => {
+                  summary += `| \`${t.name}\` | \`${t.methodName}\` | ${(t.message || "").replace(/\n/g, "<br>")} |\n`;
+                });
+              }
+            }
+
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary);
+
+            if (status !== 0 || compFailures.length > 0 || testFailures.length > 0) {
+              process.exit(1);
+            }
+          '
