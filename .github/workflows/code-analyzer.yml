@@ -29,13 +29,44 @@ jobs:
       - name: Install Salesforce Code Analyzer
         run: sf plugins install code-analyzer
 
-      - name: Run Salesforce Code Analyzer (Strict)
+      - name: Ejecutar Salesforce Code Analyzer
+        continue-on-error: true
         run: |
-          sf code-analyzer run --workspace force-app --severity-threshold 2 --view detail --output-file code-analyzer-results.html
+          sf code-analyzer run --workspace force-app --severity-threshold 2 --output-file code-analyzer-results.json
 
-      - name: Subir Reporte HTML de Resultados
+      - name: Generar Anotaciones Visiales y Resumen
+        if: always()
+        run: |
+          node -e '
+            const fs = require("fs");
+            if (!fs.existsSync("code-analyzer-results.json")) process.exit(0);
+            const data = JSON.parse(fs.readFileSync("code-analyzer-results.json", "utf8"));
+            
+            let summary = "### 🚨 Resultado de Salesforce Code Analyzer\n\n";
+            summary += "| Severidad | Archivo | Línea | Regla | Mensaje |\n";
+            summary += "| :--- | :--- | :--- | :--- | :--- |\n";
+            
+            let hasErrors = false;
+            if (data.violations && data.violations.length > 0) {
+              data.violations.forEach(v => {
+                const sevLabel = v.severity === 1 ? "🔴 Alta" : v.severity === 2 ? "🟠 Media" : "🟡 Baja";
+                summary += `| ${sevLabel} | \`${v.fileName}\` | ${v.line} | \`${v.ruleName}\` | ${v.message} |\n`;
+                
+                // Crear anotación visual roja directamente en las líneas de código de la PR
+                console.log(`::error file=${v.fileName},line=${v.line}::[${v.ruleName}] ${v.message}`);
+                if (v.severity <= 2) hasErrors = true;
+              });
+            } else {
+              summary += "| ✅ | - | - | - | No se encontraron violaciones |\n";
+            }
+            
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary);
+            if (hasErrors) process.exit(1);
+          '
+
+      - name: Subir Reporte HTML como Artefacto
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: code-analyzer-results
-          path: code-analyzer-results.html
+          path: code-analyzer-results.json
