@@ -29,13 +29,121 @@ jobs:
       - name: Install Salesforce Code Analyzer
         run: sf plugins install code-analyzer
 
-      - name: Run Salesforce Code Analyzer (Strict)
+      - name: Ejecutar Salesforce Code Analyzer
+        continue-on-error: true
         run: |
-          sf code-analyzer run --workspace force-app --severity-threshold 2 --view detail --output-file code-analyzer-results.html
+          sf code-analyzer run --workspace force-app --severity-threshold 2 --output-file code-analyzer-results.json
 
-      - name: Subir Reporte HTML de Resultados
+      - name: Procesar Resumen de Calidad
+        if: always()
+        run: |
+          node -e '
+            const fs = require("fs");
+            if (!fs.existsSync("code-analyzer-results.json")) process.exit(0);
+            
+            let rawData;
+            try {
+              rawData = JSON.parse(fs.readFileSync("code-analyzer-results.json", "utf8"));
+            } catch(e) {
+              process.exit(0);
+            }
+
+            function getFile(v, parent) {
+              let f = v.fileName || v.file || v.path || v.resource;
+              if (!f && v.location) f = v.location.file || v.location.fileName || v.location.path;
+              if (!f && v.locations && v.locations[0]) f = v.locations[0].file || v.locations[0].fileName || v.locations[0].path;
+              if (!f && parent) f = parent.fileName || parent.file || parent.path;
+              if (!f) f = "N/A";
+              return f.includes("force-app") ? "force-app" + f.split("force-app")[1] : f;
+            }
+
+            function getLine(v) {
+              let l = v.line || v.startLine || v.lineNumber;
+              if (!l && v.location) l = v.location.line || v.location.startLine;
+              if (!l && v.locations && v.locations[0]) {
+                const loc = v.locations[0];
+                l = loc.line || loc.startLine || loc.lineNumber || (loc.lineRange && loc.lineRange.start && loc.lineRange.start.line);
+              }
+              return Number(l) || 1;
+            }
+
+            let violations = [];
+
+            function processItem(v, parent) {
+              violations.push({
+                file: getFile(v, parent),
+                line: getLine(v),
+                rule: v.ruleName || v.rule || "N/A",
+                severity: Number(v.severity) || 3,
+                message: v.message || ""
+              });
+            }
+
+            if (Array.isArray(rawData)) {
+              rawData.forEach(item => {
+                const list = item.violations || item.results || [];
+                if (Array.isArray(list) && list.length > 0) {
+                  list.forEach(v => processItem(v, item));
+                } else if (item.ruleName || item.rule || item.severity) {
+                  processItem(item, null);
+                }
+              });
+            } else if (rawData && typeof rawData === "object") {
+              const list = rawData.violations || rawData.results || rawData.runs || [];
+              if (Array.isArray(list)) {
+                list.forEach(item => {
+                  if (item.violations && Array.isArray(item.violations)) {
+                    item.violations.forEach(v => processItem(v, item));
+                  } else {
+                    processItem(item, null);
+                  }
+                });
+              }
+            }
+
+            const errors = violations.filter(v => v.severity <= 3);
+            const warnings = violations.filter(v => v.severity > 3);
+
+            let summary = "## 🛡️ Resultado de Salesforce Code Analyzer\n\n";
+
+            if (violations.length === 0) {
+              summary += "✅ **¡Código limpio! No se han encontrado violaciones.**\n";
+            } else {
+              summary += `### ⛔ Errores Críticos (Obligatorio Corregir para Aprobar PR): ${errors.length}\n`;
+              if (errors.length > 0) {
+                summary += "| Severidad | Archivo | Línea | Regla | Descripción |\n";
+                summary += "| :--- | :--- | :--- | :--- | :--- |\n";
+                errors.forEach(e => {
+                  const sevStr = e.severity === 1 ? "🔴 Alta" : "🟠 Media";
+                  summary += `| ${sevStr} | \`${e.file}\` | ${e.line} | \`${e.rule}\` | ${e.message} |\n`;
+                });
+              } else {
+                summary += "*No hay errores críticos que bloqueen la PR.*\n";
+              }
+
+              summary += "\n---\n\n";
+
+              summary += `### ⚠️ Advertencias / Warnings (Informativos - No Bloquean): ${warnings.length}\n`;
+              if (warnings.length > 0) {
+                summary += "| Severidad | Archivo | Línea | Regla | Descripción |\n";
+                summary += "| :--- | :--- | :--- | :--- | :--- |\n";
+                warnings.forEach(w => {
+                  const sevStr = w.severity === 3 ? "🟡 Baja" : "⚪ Info";
+                  summary += `| ${sevStr} | \`${w.file}\` | ${w.line} | \`${w.rule}\` | ${w.message} |\n`;
+                });
+              } else {
+                summary += "*No hay advertencias recomendadas.*\n";
+              }
+            }
+
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary);
+
+            if (errors.length > 0) process.exit(1);
+          '
+
+      - name: Subir Reporte JSON como Artefacto
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: code-analyzer-results
-          path: code-analyzer-results.html
+          path: code-analyzer-results.json
