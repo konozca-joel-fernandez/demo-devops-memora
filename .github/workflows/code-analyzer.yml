@@ -9,11 +9,6 @@ on:
     paths:
       - 'force-app/**'
 
-permissions:
-  contents: read
-  checks: write
-  pull-requests: write
-
 jobs:
   code-analyzer:
     name: Salesforce Code Analyzer
@@ -28,31 +23,19 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '17'
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
       - name: Install Salesforce CLI
         run: npm install --global @salesforce/cli
 
       - name: Install Salesforce Code Analyzer
         run: sf plugins install code-analyzer
 
-      - name: Run Salesforce Code Analyzer
-        id: run-code-analyzer
-        uses: forcedotcom/run-code-analyzer@v2
+      - name: Run Salesforce Code Analyzer (Strict)
+        run: |
+          sf code-analyzer run --workspace force-app --severity-threshold 2 --output-file code-analyzer-results.html
+
+      - name: Subir Reporte HTML de Resultados
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          run-arguments: >-
-            --workspace force-app
-            --view detail
-            --severity-threshold 2
-            --output-file code-analyzer-results.html
-          results-artifact-name: code-analyzer-results
-          github-token: ${{ github.token }}
+          name: code-analyzer-results
+          path: code-analyzer-results.html
