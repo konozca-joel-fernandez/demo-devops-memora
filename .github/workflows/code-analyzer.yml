@@ -101,8 +101,8 @@ jobs:
               }
             }
 
-            const errors = violations.filter(v => v.severity <= 2);
-            const warnings = violations.filter(v => v.severity > 2);
+            const errors = violations.filter(v => v.severity <= 3);
+            const warnings = violations.filter(v => v.severity > 3);
 
             let summary = "## 🛡️ Resultado de Salesforce Code Analyzer\n\n";
 
