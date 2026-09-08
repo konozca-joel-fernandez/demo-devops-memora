@@ -41,6 +41,10 @@ jobs:
 
           if [ -z "$CHANGED_FILES" ]; then
             echo "⏭️ No se han modificado archivos analizables en esta PR. Saltando el escaneo."
+            
+            # Avisamos a Node.js de que no hubo ejecución
+            echo "SKIP_ANALYZER=true" >> $GITHUB_ENV
+            
             # Creamos un JSON vacío para que el script de Node no falle
             echo '[]' > code-analyzer-results.json
           else
@@ -58,6 +62,16 @@ jobs:
         run: |
           node -e '
             const fs = require("fs");
+            
+            // --- NUEVO BLOQUE: Interceptar si se saltó el escaneo ---
+            if (process.env.SKIP_ANALYZER === "true") {
+              let summary = "## 🛡️ Resultado de Salesforce Code Analyzer\n\n";
+              summary += "⏭️ **Escaneo omitido.** *No se han detectado modificaciones en archivos analizables (`.cls`, `.js`, `.html`, etc.) en esta PR.*\n";
+              fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary);
+              process.exit(0);
+            }
+            // --------------------------------------------------------
+
             if (!fs.existsSync("code-analyzer-results.json")) process.exit(0);
             
             let rawData;
