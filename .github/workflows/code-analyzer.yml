@@ -31,7 +31,7 @@ jobs:
 
       - name: Run Salesforce Code Analyzer (Strict)
         run: |
-          sf code-analyzer run --workspace force-app --severity-threshold 2 --output-file code-analyzer-results.html
+          sf code-analyzer run --workspace force-app --severity-threshold 2 --view detail --output-file code-analyzer-results.html
 
       - name: Subir Reporte HTML de Resultados
         if: always()
