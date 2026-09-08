@@ -186,13 +186,13 @@ jobs:
                   echo "🧪 Validando cambios y ejecutando tests especificados: $TESTS"
                   sf project deploy validate --target-org dev-org --source-dir force-app --test-level RunSpecifiedTests --tests $TESTS --json > deploy-result.json || true
                 else
-                  echo "⚠️ Hay cambios en Apex pero tests_to_run.txt está vacío. Validando sin tests (NoTestsRun)."
-                  sf project deploy validate --target-org dev-org --source-dir force-app --test-level NoTestsRun --json > deploy-result.json || true
+                  echo "⚠️ Hay cambios en Apex pero tests_to_run.txt está vacío. Validando sin tests..."
+                  sf project deploy validate --target-org dev-org --source-dir force-app --json > deploy-result.json || true
                 fi
               else
                 echo "⏭️ No se han detectado cambios en código Apex. Saltando la ejecución de unit tests."
-                echo "📦 Validando únicamente el despliegue de metadatos (NoTestsRun)..."
-                sf project deploy validate --target-org dev-org --source-dir force-app --test-level NoTestsRun --json > deploy-result.json || true
+                echo "📦 Validando únicamente el despliegue de metadatos..."
+                sf project deploy validate --target-org dev-org --source-dir force-app --json > deploy-result.json || true
               fi
 
           - name: Procesar Resumen de Validación y Tests
