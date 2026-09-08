@@ -34,37 +34,104 @@ jobs:
         run: |
           sf code-analyzer run --workspace force-app --severity-threshold 2 --output-file code-analyzer-results.json
 
-      - name: Generar Anotaciones Visiales y Resumen
+      - name: Procesar Resumen y Anotaciones
         if: always()
         run: |
           node -e '
             const fs = require("fs");
             if (!fs.existsSync("code-analyzer-results.json")) process.exit(0);
-            const data = JSON.parse(fs.readFileSync("code-analyzer-results.json", "utf8"));
             
-            let summary = "### 🚨 Resultado de Salesforce Code Analyzer\n\n";
-            summary += "| Severidad | Archivo | Línea | Regla | Mensaje |\n";
-            summary += "| :--- | :--- | :--- | :--- | :--- |\n";
-            
-            let hasErrors = false;
-            if (data.violations && data.violations.length > 0) {
-              data.violations.forEach(v => {
-                const sevLabel = v.severity === 1 ? "🔴 Alta" : v.severity === 2 ? "🟠 Media" : "🟡 Baja";
-                summary += `| ${sevLabel} | \`${v.fileName}\` | ${v.line} | \`${v.ruleName}\` | ${v.message} |\n`;
-                
-                // Crear anotación visual roja directamente en las líneas de código de la PR
-                console.log(`::error file=${v.fileName},line=${v.line}::[${v.ruleName}] ${v.message}`);
-                if (v.severity <= 2) hasErrors = true;
-              });
-            } else {
-              summary += "| ✅ | - | - | - | No se encontraron violaciones |\n";
+            let rawData;
+            try {
+              rawData = JSON.parse(fs.readFileSync("code-analyzer-results.json", "utf8"));
+            } catch(e) {
+              process.exit(0);
             }
-            
+
+            let violations = [];
+
+            // Normalización de la estructura JSON de Salesforce
+            if (Array.isArray(rawData)) {
+              rawData.forEach(fileItem => {
+                const filePath = fileItem.fileName || fileItem.file || "";
+                if (fileItem.violations && Array.isArray(fileItem.violations)) {
+                  fileItem.violations.forEach(v => {
+                    violations.push({
+                      file: filePath || v.fileName || v.file || "N/A",
+                      line: v.line || (v.locations && v.locations[0]?.line) || 1,
+                      rule: v.ruleName || v.rule || "N/A",
+                      severity: Number(v.severity) || 3,
+                      message: v.message || ""
+                    });
+                  });
+                }
+              });
+            } else if (rawData && typeof rawData === "object") {
+              const list = rawData.violations || rawData.results || [];
+              list.forEach(v => {
+                violations.push({
+                  file: v.fileName || v.file || (v.location && v.location.file) || "N/A",
+                  line: v.line || (v.location && v.location.line) || 1,
+                  rule: v.ruleName || v.rule || "N/A",
+                  severity: Number(v.severity) || 3,
+                  message: v.message || ""
+                });
+              });
+            }
+
+            // Separación entre Errores (Gravedad 1 y 2) y Warnings (Gravedad 3 o superior)
+            const errors = violations.filter(v => v.severity <= 2);
+            const warnings = violations.filter(v => v.severity > 2);
+
+            let summary = "## 🛡️ Resultado de Salesforce Code Analyzer\n\n";
+
+            if (violations.length === 0) {
+              summary += "✅ **¡Código limpio! No se han encontrado violaciones.**\n";
+            } else {
+              // Tabla 1: Errores que bloquean
+              summary += `### ⛔ Errores Críticos (Obligatorio Corregir para Aprobar PR): ${errors.length}\n`;
+              if (errors.length > 0) {
+                summary += "| Severidad | Archivo | Línea | Regla | Descripción |\n";
+                summary += "| :--- | :--- | :--- | :--- | :--- |\n";
+                errors.forEach(e => {
+                  const sevStr = e.severity === 1 ? "🔴 Alta" : "🟠 Media";
+                  const cleanFile = e.file.replace(/^.*force-app/, "force-app");
+                  summary += `| ${sevStr} | \`${cleanFile}\` | ${e.line} | \`${e.rule}\` | ${e.message} |\n`;
+                  
+                  // Marcado en rojo directamente en el código de la PR
+                  console.log(`::error file=${cleanFile},line=${e.line}::[${e.rule}] ${e.message}`);
+                });
+              } else {
+                summary += "*No hay errores críticos que bloqueen la PR.*\n";
+              }
+
+              summary += "\n---\n\n";
+
+              // Tabla 2: Warnings informativos
+              summary += `### ⚠️ Advertencias / Warnings (Informativos - No Bloquean): ${warnings.length}\n`;
+              if (warnings.length > 0) {
+                summary += "| Severidad | Archivo | Línea | Regla | Descripción |\n";
+                summary += "| :--- | :--- | :--- | :--- | :--- |\n";
+                warnings.forEach(w => {
+                  const sevStr = w.severity === 3 ? "🟡 Baja" : "⚪ Info";
+                  const cleanFile = w.file.replace(/^.*force-app/, "force-app");
+                  summary += `| ${sevStr} | \`${cleanFile}\` | ${w.line} | \`${w.rule}\` | ${w.message} |\n`;
+                  
+                  // Marcado en amarillo directamente en el código de la PR
+                  console.log(`::warning file=${cleanFile},line=${w.line}::[${w.rule}] ${w.message}`);
+                });
+              } else {
+                summary += "*No hay advertencias recomendadas.*\n";
+              }
+            }
+
             fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary);
-            if (hasErrors) process.exit(1);
+
+            // Si hay errores de gravedad 1 o 2, la pipeline falla y bloquea el Merge
+            if (errors.length > 0) process.exit(1);
           '
 
-      - name: Subir Reporte HTML como Artefacto
+      - name: Subir Reporte JSON como Artefacto
         if: always()
         uses: actions/upload-artifact@v4
         with:
