@@ -173,8 +173,74 @@ jobs:
           if [ -f "tests_to_run.txt" ] && [ -s "tests_to_run.txt" ]; then
             TESTS=$(cat tests_to_run.txt | tr '\r\n' ' ' | xargs)
             echo "🧪 Validando cambios y ejecutando tests especificados: $TESTS"
-            sf project deploy validate --target-org dev-org --test-level RunSpecifiedTests --tests $TESTS
+            sf project deploy validate --target-org dev-org --test-level RunSpecifiedTests --tests $TESTS --json > deploy-result.json || true
           else
             echo "⚠️ No se encontraron tests en tests_to_run.txt. Validando solo compilación de metadatos..."
-            sf project deploy validate --target-org dev-org --test-level NoTestsRun
+            sf project deploy validate --target-org dev-org --test-level NoTestsRun --json > deploy-result.json || true
           fi
+
+      - name: Procesar Resumen de Validación y Tests
+        if: always()
+        run: |
+          node -e '
+            const fs = require("fs");
+            if (!fs.existsSync("deploy-result.json")) process.exit(0);
+            
+            let rawData;
+            try {
+              rawData = JSON.parse(fs.readFileSync("deploy-result.json", "utf8"));
+            } catch(e) {
+              process.exit(0);
+            }
+
+            const res = rawData.result || {};
+            const details = res.details || res;
+            
+            const compFailures = details.componentFailures ? (Array.isArray(details.componentFailures) ? details.componentFailures : [details.componentFailures]) : [];
+            
+            let testFailures = [];
+            if (details.runTestResult && details.runTestResult.failures) {
+              testFailures = Array.isArray(details.runTestResult.failures) ? details.runTestResult.failures : [details.runTestResult.failures];
+            }
+
+            let summary = "## 🧪 Resultado de Validación en Salesforce\n\n";
+            let hasErrors = false;
+
+            if (rawData.status === 0 && compFailures.length === 0 && testFailures.length === 0) {
+              summary += "✅ **¡Validación y Tests completados con éxito en Salesforce!**\n";
+            } else {
+              hasErrors = true;
+
+              // 1. Errores de compilación o sintaxis en metadatos
+              if (compFailures.length > 0) {
+                summary += `### ❌ Errores de Compilación / Metadatos (${compFailures.length})\n`;
+                summary += "| Archivo / Componente | Línea | Tipo | Problema |\n";
+                summary += "| :--- | :--- | :--- | :--- |\n";
+                compFailures.forEach(f => {
+                  const file = f.fileName || f.fullName || "N/A";
+                  const line = f.lineNumber || "-";
+                  const type = f.problemType || "Error";
+                  const prob = (f.problem || "").replace(/\n/g, "<br>");
+                  summary += `| \`${file}\` | ${line} | ${type} | ${prob} |\n`;
+                });
+                summary += "\n---\n\n";
+              }
+
+              // 2. Errores de aserción o fallos en Tests Apex
+              if (testFailures.length > 0) {
+                summary += `### 💥 Errores en Tests Apex (${testFailures.length})\n`;
+                summary += "| Clase Test | Método | Mensaje de Error |\n";
+                summary += "| :--- | :--- | :--- |\n";
+                testFailures.forEach(t => {
+                  const cls = t.name || "N/A";
+                  const method = t.methodName || "N/A";
+                  const msg = (t.message || "").replace(/\n/g, "<br>");
+                  summary += `| \`${cls}\` | \`${method}\` | ${msg} |\n`;
+                });
+              }
+            }
+
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary);
+
+            if (hasErrors) process.exit(1);
+          '
