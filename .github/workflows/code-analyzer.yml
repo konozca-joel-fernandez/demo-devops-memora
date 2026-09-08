@@ -184,34 +184,48 @@ jobs:
         run: |
           node -e '
             const fs = require("fs");
-            if (!fs.existsSync("deploy-result.json")) process.exit(0);
-            
+            let summary = "## 🧪 Resultado de Validación en Salesforce\n\n";
+
+            if (!fs.existsSync("deploy-result.json")) {
+              summary += "❌ **Error Crítico:** No se pudo generar el archivo de resultados de la CLI de Salesforce.\n";
+              fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary);
+              process.exit(1);
+            }
+
             let rawData;
             try {
               rawData = JSON.parse(fs.readFileSync("deploy-result.json", "utf8"));
             } catch(e) {
-              process.exit(0);
+              summary += "❌ **Error:** No se pudo procesar la respuesta JSON de Salesforce.\n";
+              fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary);
+              process.exit(1);
             }
 
+            const status = rawData.status;
             const res = rawData.result || {};
             const details = res.details || res;
-            
+
             const compFailures = details.componentFailures ? (Array.isArray(details.componentFailures) ? details.componentFailures : [details.componentFailures]) : [];
-            
             let testFailures = [];
             if (details.runTestResult && details.runTestResult.failures) {
               testFailures = Array.isArray(details.runTestResult.failures) ? details.runTestResult.failures : [details.runTestResult.failures];
             }
 
-            let summary = "## 🧪 Resultado de Validación en Salesforce\n\n";
             let hasErrors = false;
 
-            if (rawData.status === 0 && compFailures.length === 0 && testFailures.length === 0) {
+            if (status === 0 && compFailures.length === 0 && testFailures.length === 0) {
               summary += "✅ **¡Validación y Tests completados con éxito en Salesforce!**\n";
             } else {
               hasErrors = true;
 
-              // 1. Errores de compilación o sintaxis en metadatos
+              // 1. Captura de errores globales/previos de la CLI (Ej: Clase no encontrada, org no alcanzable)
+              if (rawData.message || rawData.errorMessage || (compFailures.length === 0 && testFailures.length === 0)) {
+                const topError = rawData.message || rawData.errorMessage || res.message || "Error general de despliegue o parámetro no válido.";
+                summary += `### 🛑 Error General de Despliegue / CLI\n`;
+                summary += `> **Detalle del fallo:** ${topError}\n\n`;
+              }
+
+              // 2. Errores de compilación o sintaxis en metadatos
               if (compFailures.length > 0) {
                 summary += `### ❌ Errores de Compilación / Metadatos (${compFailures.length})\n`;
                 summary += "| Archivo / Componente | Línea | Tipo | Problema |\n";
@@ -226,7 +240,7 @@ jobs:
                 summary += "\n---\n\n";
               }
 
-              // 2. Errores de aserción o fallos en Tests Apex
+              // 3. Errores de aserción o fallos en Tests Apex
               if (testFailures.length > 0) {
                 summary += `### 💥 Errores en Tests Apex (${testFailures.length})\n`;
                 summary += "| Clase Test | Método | Mensaje de Error |\n";
