@@ -184,21 +184,29 @@ jobs:
                 if [ -f "tests_to_run.txt" ] && [ -s "tests_to_run.txt" ]; then
                   TESTS=$(cat tests_to_run.txt | tr '\r\n' ' ' | xargs)
                   echo "🧪 Validando cambios y ejecutando tests especificados: $TESTS"
+                  
+                  # Guardamos el estado para el resumen
+                  echo "TEST_STATUS=EXECUTED" >> $GITHUB_ENV
                   sf project deploy validate --target-org dev-org --source-dir force-app --test-level RunSpecifiedTests --tests $TESTS --json > deploy-result.json || true
                 else
                   echo "⚠️ Hay cambios en Apex pero tests_to_run.txt está vacío. Validando sin tests..."
+                  
+                  # Guardamos el estado para el resumen
+                  echo "TEST_STATUS=NO_TESTS_FILE" >> $GITHUB_ENV
                   sf project deploy validate --target-org dev-org --source-dir force-app --json > deploy-result.json || true
                 fi
               else
                 echo "⏭️ No se han detectado cambios en código Apex. Saltando la ejecución de unit tests."
                 echo "📦 Validando únicamente el despliegue de metadatos..."
+                
+                # Guardamos el estado para el resumen
+                echo "TEST_STATUS=NO_APEX" >> $GITHUB_ENV
                 sf project deploy validate --target-org dev-org --source-dir force-app --json > deploy-result.json || true
               fi
 
           - name: Procesar Resumen de Validación y Tests
             if: always()
             run: |
-              # (Deja aquí exactamente el mismo bloque de Node.js que procesa el JSON que ya teníamos)
               node -e '
                 const fs = require("fs");
                 let summary = "## 🧪 Resultado de Validación en Salesforce\n\n";
@@ -229,9 +237,21 @@ jobs:
                 }
 
                 let hasErrors = false;
+                const testStatus = process.env.TEST_STATUS || "UNKNOWN";
 
                 if (status === 0 && compFailures.length === 0 && testFailures.length === 0) {
-                  summary += "✅ **¡Validación y/o Tests completados con éxito en Salesforce!**\n";
+                  // Mensajes dinámicos según el estado de la ejecución
+                  if (testStatus === "EXECUTED") {
+                    summary += "✅ **¡Validación de metadatos y Tests Apex completados con éxito!**\n";
+                  } else if (testStatus === "NO_APEX") {
+                    summary += "✅ **¡Validación de metadatos completada con éxito!**\n\n";
+                    summary += "⏭️ *Se ha omitido la ejecución de Unit Tests porque no se detectaron modificaciones en archivos de Apex (`.cls` o `.trigger`).*\n";
+                  } else if (testStatus === "NO_TESTS_FILE") {
+                    summary += "✅ **¡Validación de metadatos completada con éxito!**\n\n";
+                    summary += "⚠️ *Atención: Se ha modificado código Apex, pero no se ejecutaron pruebas porque el archivo `tests_to_run.txt` estaba vacío o no existía.*\n";
+                  } else {
+                    summary += "✅ **¡Validación completada con éxito en Salesforce!**\n";
+                  }
                 } else {
                   hasErrors = true;
 
