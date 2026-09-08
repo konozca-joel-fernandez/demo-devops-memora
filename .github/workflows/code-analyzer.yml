@@ -173,10 +173,10 @@ jobs:
           if [ -f "tests_to_run.txt" ] && [ -s "tests_to_run.txt" ]; then
             TESTS=$(cat tests_to_run.txt | tr '\r\n' ' ' | xargs)
             echo "🧪 Validando cambios y ejecutando tests especificados: $TESTS"
-            sf project deploy validate --target-org dev-org --test-level RunSpecifiedTests --tests $TESTS --json > deploy-result.json || true
+            sf project deploy validate --target-org dev-org --source-dir force-app --test-level RunSpecifiedTests --tests $TESTS --json > deploy-result.json || true
           else
             echo "⚠️ No se encontraron tests en tests_to_run.txt. Validando solo compilación de metadatos..."
-            sf project deploy validate --target-org dev-org --test-level NoTestsRun --json > deploy-result.json || true
+            sf project deploy validate --target-org dev-org --source-dir force-app --test-level NoTestsRun --json > deploy-result.json || true
           fi
 
       - name: Procesar Resumen de Validación y Tests
