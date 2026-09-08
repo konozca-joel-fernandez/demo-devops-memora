@@ -205,6 +205,7 @@ jobs:
                   
                   # Guardamos el estado para el resumen
                   echo "TEST_STATUS=EXECUTED" >> $GITHUB_ENV
+                  echo "EXECUTED_TESTS=$TESTS" >> $GITHUB_ENV
                   sf project deploy validate --target-org dev-org --source-dir force-app --test-level RunSpecifiedTests --tests $TESTS --json > deploy-result.json || true
                 else
                   echo "⚠️ Hay cambios en Apex pero tests_to_run.txt está vacío. Validando sin tests..."
@@ -261,6 +262,15 @@ jobs:
                   // Mensajes dinámicos según el estado de la ejecución
                   if (testStatus === "EXECUTED") {
                     summary += "✅ **¡Validación de metadatos y Tests Apex completados con éxito!**\n";
+                    const executedTests = process.env.EXECUTED_TESTS || "";
+                    if (executedTests) {
+                      summary += "### 🧪 Clases de Test Ejecutadas:\n";
+                      // Convertimos el string separado por espacios en una lista de Markdown
+                      executedTests.split(" ").filter(Boolean).forEach(t => {
+                        summary += `- \`${t}\`\n`;
+                      });
+                      summary += "\n";
+                    }
                   } else if (testStatus === "NO_APEX") {
                     summary += "✅ **¡Validación de metadatos completada con éxito!**\n\n";
                     summary += "⏭️ *Se ha omitido la ejecución de Unit Tests porque no se detectaron modificaciones en archivos de Apex (`.cls` o `.trigger`).*\n";
