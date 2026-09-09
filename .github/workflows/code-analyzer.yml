@@ -425,6 +425,15 @@ jobs:
 
           fi
 
+      - name: Mostrar resultado completo de Salesforce
+        if: always()
+        run: |
+          echo "========== deploy-result.json =========="
+          if [ -f "deploy-result.json" ]; then
+            cat deploy-result.json
+          else
+            echo "deploy-result.json no existe"
+          fi
 
       # ============================================================
       # 7. GENERAR RESUMEN
@@ -440,7 +449,10 @@ jobs:
 
             const testStatus = process.env.TEST_STATUS || "UNKNOWN";
 
-            // Caso especial: había Apex pero no se especificaron tests
+            // =====================================================
+            // APEX MODIFICADO SIN TESTS
+            // =====================================================
+
             if (testStatus === "NO_TESTS_FILE") {
 
               summary += "❌ **Validación bloqueada.**\n\n";
@@ -455,6 +467,10 @@ jobs:
               process.exit(1);
             }
 
+
+            // =====================================================
+            // COMPROBAR JSON
+            // =====================================================
 
             if (!fs.existsSync("deploy-result.json")) {
 
@@ -479,7 +495,8 @@ jobs:
 
             } catch(e) {
 
-              summary += "❌ **Error:** No se pudo procesar la respuesta JSON de Salesforce.\n";
+              summary += "❌ **Error:** No se pudo procesar la respuesta JSON de Salesforce.\n\n";
+              summary += `Detalle técnico: ${e.message}\n`;
 
               fs.appendFileSync(
                 process.env.GITHUB_STEP_SUMMARY,
@@ -490,57 +507,110 @@ jobs:
             }
 
 
-            const status = rawData.status;
+            // =====================================================
+            // DATOS GENERALES
+            // =====================================================
+
+            const cliStatus = rawData.status;
 
             const res = rawData.result || {};
 
-            const details = res.details || res;
+            const details = res.details || {};
+
+            const runTestResult =
+              details.runTestResult || {};
 
 
-            // ------------------------------------------------------
-            // Errores de componentes
-            // ------------------------------------------------------
+            // =====================================================
+            // COMPONENT FAILURES
+            // =====================================================
 
-            const compFailures = details.componentFailures
-              ? (
-                  Array.isArray(details.componentFailures)
-                    ? details.componentFailures
-                    : [details.componentFailures]
-                )
-              : [];
+            const compFailures =
+              details.componentFailures
+                ? (
+                    Array.isArray(details.componentFailures)
+                      ? details.componentFailures
+                      : [details.componentFailures]
+                  )
+                : [];
 
 
-            // ------------------------------------------------------
-            // Errores de tests
-            // ------------------------------------------------------
+            // =====================================================
+            // TEST FAILURES
+            // =====================================================
 
-            let testFailures = [];
+            const testFailures =
+              runTestResult.failures
+                ? (
+                    Array.isArray(runTestResult.failures)
+                      ? runTestResult.failures
+                      : [runTestResult.failures]
+                  )
+                : [];
 
-            if (
-              details.runTestResult &&
-              details.runTestResult.failures
-            ) {
 
-              testFailures = Array.isArray(
-                details.runTestResult.failures
-              )
-                ? details.runTestResult.failures
-                : [details.runTestResult.failures];
+            // =====================================================
+            // CODE COVERAGE WARNINGS
+            // =====================================================
+
+            const coverageWarnings =
+              runTestResult.codeCoverageWarnings
+                ? (
+                    Array.isArray(runTestResult.codeCoverageWarnings)
+                      ? runTestResult.codeCoverageWarnings
+                      : [runTestResult.codeCoverageWarnings]
+                  )
+                : [];
+
+
+            // =====================================================
+            // FLOW COVERAGE WARNINGS
+            // =====================================================
+
+            const flowCoverageWarnings =
+              runTestResult.flowCoverageWarnings
+                ? (
+                    Array.isArray(runTestResult.flowCoverageWarnings)
+                      ? runTestResult.flowCoverageWarnings
+                      : [runTestResult.flowCoverageWarnings]
+                  )
+                : [];
+
+
+            // =====================================================
+            // DETERMINAR RESULTADO REAL DEL DEPLOY
+            // =====================================================
+
+            const deployFailed =
+              cliStatus !== 0 ||
+              res.success === false ||
+              res.status === "Failed";
+
+
+            let hasErrors =
+              deployFailed ||
+              compFailures.length > 0 ||
+              testFailures.length > 0;
+
+
+            // =====================================================
+            // INFORMACIÓN DEL DEPLOY
+            // =====================================================
+
+            if (res.id) {
+              summary += `**Deployment ID:** \`${res.id}\`\n\n`;
+            }
+
+            if (res.status) {
+              summary += `**Estado Salesforce:** \`${res.status}\`\n\n`;
             }
 
 
-            let hasErrors = false;
-
-
-            // ======================================================
+            // =====================================================
             // RESULTADO CORRECTO
-            // ======================================================
+            // =====================================================
 
-            if (
-              status === 0 &&
-              compFailures.length === 0 &&
-              testFailures.length === 0
-            ) {
+            if (!hasErrors) {
 
               if (testStatus === "EXECUTED") {
 
@@ -551,7 +621,7 @@ jobs:
 
                 if (executedTests) {
 
-                  summary += "### 🧪 Clases de Test Ejecutadas:\n";
+                  summary += "### 🧪 Clases de Test Ejecutadas\n";
 
                   executedTests
                     .split(" ")
@@ -570,7 +640,7 @@ jobs:
 
                 summary += "✅ **¡Validación de metadatos completada con éxito!**\n\n";
 
-                summary += "⏭️ *Se ha omitido la ejecución de Unit Tests porque no se detectaron modificaciones en archivos Apex (`.cls` o `.trigger`).*\n";
+                summary += "⏭️ Se ha omitido la ejecución de Unit Tests porque no se detectaron modificaciones en archivos Apex (`.cls` o `.trigger`).\n";
 
 
               } else if (testStatus === "NO_METADATA") {
@@ -584,51 +654,43 @@ jobs:
 
               }
 
-
-            // ======================================================
-            // RESULTADO CON ERRORES
-            // ======================================================
-
             } else {
 
-              hasErrors = true;
+              // ===================================================
+              // ERROR GENERAL
+              // ===================================================
+
+              const specificErrorsFound =
+                compFailures.length > 0 ||
+                testFailures.length > 0 ||
+                coverageWarnings.length > 0 ||
+                flowCoverageWarnings.length > 0;
 
 
-              // ----------------------------------------------------
-              // Error general
-              // ----------------------------------------------------
-
-              if (
-                rawData.message ||
-                rawData.errorMessage ||
-                (
-                  compFailures.length === 0 &&
-                  testFailures.length === 0
-                )
-              ) {
+              if (!specificErrorsFound) {
 
                 const topError =
                   rawData.message ||
                   rawData.errorMessage ||
+                  res.errorMessage ||
                   res.message ||
-                  "Error general de despliegue o parámetro no válido.";
+                  `Salesforce ha devuelto estado ${res.status || cliStatus}.`;
 
-                summary += "### 🛑 Error General de Despliegue / CLI\n";
+                summary += "### 🛑 Error General de Despliegue / CLI\n\n";
 
                 summary += `> **Detalle del fallo:** ${topError}\n\n`;
               }
 
 
-              // ----------------------------------------------------
-              // Errores de componentes
-              // ----------------------------------------------------
+              // ===================================================
+              // ERRORES DE COMPONENTES
+              // ===================================================
 
               if (compFailures.length > 0) {
 
-                summary += `### ❌ Errores de Compilación / Metadatos (${compFailures.length})\n`;
+                summary += `### ❌ Errores de Compilación / Metadatos (${compFailures.length})\n\n`;
 
-                summary += "| Archivo / Componente | Línea | Tipo | Problema |\n";
-
+                summary += "| Componente | Línea | Tipo | Problema |\n";
                 summary += "| :--- | :--- | :--- | :--- |\n";
 
 
@@ -645,30 +707,30 @@ jobs:
 
                   const type =
                     f.problemType ||
+                    f.componentType ||
                     "Error";
 
-                  const prob =
-                    (f.problem || "")
+                  const problem =
+                    (f.problem || f.error || "")
                       .replace(/\n/g, "<br>");
 
-                  summary += `| \`${file}\` | ${line} | ${type} | ${prob} |\n`;
+                  summary += `| \`${file}\` | ${line} | ${type} | ${problem} |\n`;
 
                 });
 
-                summary += "\n---\n\n";
+                summary += "\n";
               }
 
 
-              // ----------------------------------------------------
-              // Errores de tests
-              // ----------------------------------------------------
+              // ===================================================
+              // ERRORES DE TEST
+              // ===================================================
 
               if (testFailures.length > 0) {
 
-                summary += `### 💥 Errores en Tests Apex (${testFailures.length})\n`;
+                summary += `### 💥 Errores en Tests Apex (${testFailures.length})\n\n`;
 
-                summary += "| Clase Test | Método | Mensaje de Error |\n";
-
+                summary += "| Clase Test | Método | Mensaje |\n";
                 summary += "| :--- | :--- | :--- |\n";
 
 
@@ -690,6 +752,55 @@ jobs:
 
                 });
 
+                summary += "\n";
+              }
+
+
+              // ===================================================
+              // ERRORES / WARNINGS DE COBERTURA
+              // ===================================================
+
+              if (coverageWarnings.length > 0) {
+
+                summary += `### 📊 Problemas de Cobertura Apex (${coverageWarnings.length})\n\n`;
+
+                summary += "| Clase / Trigger | Problema |\n";
+                summary += "| :--- | :--- |\n";
+
+
+                coverageWarnings.forEach(c => {
+
+                  const name =
+                    c.name ||
+                    "N/A";
+
+                  const msg =
+                    (c.message || "")
+                      .replace(/\n/g, "<br>");
+
+                  summary += `| \`${name}\` | ${msg} |\n`;
+
+                });
+
+                summary += "\n";
+              }
+
+
+              // ===================================================
+              // FLOW COVERAGE
+              // ===================================================
+
+              if (flowCoverageWarnings.length > 0) {
+
+                summary += `### 🌊 Problemas de Cobertura de Flows (${flowCoverageWarnings.length})\n\n`;
+
+                flowCoverageWarnings.forEach(f => {
+
+                  summary += `- ${f.message || JSON.stringify(f)}\n`;
+
+                });
+
+                summary += "\n";
               }
 
             }
@@ -701,9 +812,9 @@ jobs:
             );
 
 
-            // El resultado del deploy se ha capturado con "|| true"
-            // para poder mostrar este resumen.
-            // Aquí hacemos realmente fallar el Quality Gate.
+            // El comando Salesforce utiliza || true para que podamos
+            // procesar y mostrar el JSON.
+            // El Quality Gate se falla aquí.
             if (hasErrors) {
               process.exit(1);
             }
