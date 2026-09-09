@@ -214,8 +214,15 @@ jobs:
               rm -rf delta
               mkdir -p delta
               
-              # Compara la rama base (dev) con tu rama usando 3 puntos (...)
-              sf sgd source delta --to HEAD --from origin/${{ github.base_ref }}...HEAD --output delta/
+              # 1. Traer la rama base explícitamente del repositorio remoto
+              git fetch origin ${{ github.base_ref }}
+              
+              # 2. Calcular el commit exacto donde se separó tu rama
+              BASE_COMMIT=$(git merge-base origin/${{ github.base_ref }} HEAD)
+              echo "📌 Commit base de comparación: $BASE_COMMIT"
+              
+              # 3. Generar delta usando el SHA del commit y la nueva bandera --output-dir
+              sf sgd source delta --to HEAD --from $BASE_COMMIT --output-dir delta/
               
               echo "📂 Archivos reales que han entrado en el Delta:"
               find delta/ -type f || echo "Delta vacío"
