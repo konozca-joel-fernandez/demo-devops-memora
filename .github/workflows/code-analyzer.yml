@@ -212,16 +212,17 @@ jobs:
             run: |
               git config core.autocrlf input
               rm -rf delta
-              mkdir -p delta
               
-              # 1. Traer la rama base explícitamente
+              # 1. Traer rama base y calcular SHA del commit
               git fetch origin ${{ github.base_ref }}
+              BASE_SHA=$(git merge-base origin/${{ github.base_ref }} HEAD)
+              echo "📌 SHA base para el Delta: $BASE_SHA"
               
-              # 2. Generar delta comparando directamente tu rama con dev
-              sf sgd source delta --to HEAD --from origin/${{ github.base_ref }} --output-dir delta/
+              # 2. Generar el delta usando el SHA exacto
+              sf sgd source delta --to HEAD --from $BASE_SHA --output-dir delta/
               
-              echo "📂 Archivos reales que han entrado en el Delta:"
-              find delta/ -type f || echo "Delta vacío"
+              echo "📂 Archivos aislados en la carpeta Delta:"
+              find delta/ -type f || echo "⚠️ La carpeta delta no se creó"
 
           # 3. Validar Metadatos y Tests en Salesforce
           - name: Validar Metadatos y Ejecutar Tests (Dry-Run)
