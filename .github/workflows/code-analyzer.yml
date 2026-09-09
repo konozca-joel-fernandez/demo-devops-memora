@@ -203,28 +203,35 @@ jobs:
             if: always()
             run: rm -f server.key
           
+          # 1. Instalar el plugin sfdx-git-delta
           - name: Instalar plugin sfdx-git-delta
             run: echo y | sf plugins install sfdx-git-delta
 
+          # 2. Generar el Delta de la Pull Request
           - name: Generar Delta de metadatos
             run: |
+              git config core.autocrlf input
+              rm -rf delta
               mkdir -p delta
-              sf sgd source delta --to HEAD --from origin/${{ github.base_ref }} --output delta/
-              echo "📂 Metadatos aislados en el Delta:"
-              ls -la delta/ || true
+              
+              # Compara la rama base (dev) con tu rama usando 3 puntos (...)
+              sf sgd source delta --to HEAD --from origin/${{ github.base_ref }}...HEAD --output delta/
+              
+              echo "📂 Archivos reales que han entrado en el Delta:"
+              find delta/ -type f || echo "Delta vacío"
 
-          # 2. ACTUALIZACIÓN: Comprobar cambios en Apex antes de lanzar tests
+          # 3. Validar Metadatos y Tests en Salesforce
           - name: Validar Metadatos y Ejecutar Tests (Dry-Run)
             run: |
               APEX_CHANGED=$(git diff --name-only origin/${{ github.base_ref }}...HEAD | grep -iE '\.cls$|\.trigger$' || true)
 
-              # Si existe la carpeta delta/force-app usamos solo el delta; si no, force-app completo
+              # Si el Delta se ha generado correctamente, lo usamos. Si no, force-app.
               SOURCE_DIR="force-app"
               if [ -d "delta/force-app" ]; then
                 SOURCE_DIR="delta/force-app"
               fi
 
-              echo "📦 Directorio a enviar a Salesforce: $SOURCE_DIR"
+              echo "📦 Directorio a validar en Salesforce: $SOURCE_DIR"
 
               if [ -n "$APEX_CHANGED" ]; then
                 echo "🔄 Cambios detectados en código Apex:"
@@ -232,7 +239,7 @@ jobs:
                 
                 if [ -f "tests_to_run.txt" ] && [ -s "tests_to_run.txt" ]; then
                   TESTS=$(cat tests_to_run.txt | tr '\r\n' ' ' | xargs)
-                  echo "🧪 Validando cambios y ejecutando tests especificados: $TESTS"
+                  echo "🧪 Validando Delta y ejecutando tests especificados: $TESTS"
                   
                   echo "TEST_STATUS=EXECUTED" >> $GITHUB_ENV
                   echo "EXECUTED_TESTS=$TESTS" >> $GITHUB_ENV
@@ -245,8 +252,6 @@ jobs:
                 fi
               else
                 echo "⏭️ No se han detectado cambios en código Apex. Saltando la ejecución de unit tests."
-                echo "📦 Validando únicamente el despliegue de metadatos del Delta..."
-                
                 echo "TEST_STATUS=NO_APEX" >> $GITHUB_ENV
                 sf project deploy validate --target-org dev-org --source-dir "$SOURCE_DIR" --json > deploy-result.json || true
               fi
