@@ -14,7 +14,7 @@ public with sharing class Test_insertLeads {
         Test.stopTest();
 
         // Validamos que se creó el nuevo registro clonado con estado 'New'
-        List<Lead> clonedLeads = [SELECT Id, Status FROM Lead WHERE Status = 'New'];
+        List<Lead> clonedLeads = [SELECT Id, Status, CreatedDate FROM Lead WHERE Status = 'New'];
         System.assertEquals(1, clonedLeads.size(), 'Debería haberse creado 1 clon con estado New.');
     }
 }
