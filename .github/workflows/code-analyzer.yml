@@ -202,12 +202,29 @@ jobs:
           - name: Eliminar llave privada por seguridad
             if: always()
             run: rm -f server.key
+          
+          - name: Instalar plugin sfdx-git-delta
+            run: echo y | sf plugins install sfdx-git-delta
+
+          - name: Generar Delta de metadatos
+            run: |
+              mkdir -p delta
+              sf sgd source delta --to HEAD --from origin/${{ github.base_ref }} --output delta/
+              echo "📂 Metadatos aislados en el Delta:"
+              ls -la delta/ || true
 
           # 2. ACTUALIZACIÓN: Comprobar cambios en Apex antes de lanzar tests
           - name: Validar Metadatos y Ejecutar Tests (Dry-Run)
             run: |
-              # Comparamos la rama origen con la rama destino (dev) buscando archivos .cls o .trigger
               APEX_CHANGED=$(git diff --name-only origin/${{ github.base_ref }}...HEAD | grep -iE '\.cls$|\.trigger$' || true)
+
+              # Si existe la carpeta delta/force-app usamos solo el delta; si no, force-app completo
+              SOURCE_DIR="force-app"
+              if [ -d "delta/force-app" ]; then
+                SOURCE_DIR="delta/force-app"
+              fi
+
+              echo "📦 Directorio a enviar a Salesforce: $SOURCE_DIR"
 
               if [ -n "$APEX_CHANGED" ]; then
                 echo "🔄 Cambios detectados en código Apex:"
@@ -217,24 +234,21 @@ jobs:
                   TESTS=$(cat tests_to_run.txt | tr '\r\n' ' ' | xargs)
                   echo "🧪 Validando cambios y ejecutando tests especificados: $TESTS"
                   
-                  # Guardamos el estado para el resumen
                   echo "TEST_STATUS=EXECUTED" >> $GITHUB_ENV
                   echo "EXECUTED_TESTS=$TESTS" >> $GITHUB_ENV
-                  sf project deploy validate --target-org dev-org --source-dir force-app --test-level RunSpecifiedTests --tests $TESTS --json > deploy-result.json || true
+                  sf project deploy validate --target-org dev-org --source-dir "$SOURCE_DIR" --test-level RunSpecifiedTests --tests $TESTS --json > deploy-result.json || true
                 else
                   echo "⚠️ Hay cambios en Apex pero tests_to_run.txt está vacío. Validando sin tests..."
                   
-                  # Guardamos el estado para el resumen
                   echo "TEST_STATUS=NO_TESTS_FILE" >> $GITHUB_ENV
-                  sf project deploy validate --target-org dev-org --source-dir force-app --json > deploy-result.json || true
+                  sf project deploy validate --target-org dev-org --source-dir "$SOURCE_DIR" --json > deploy-result.json || true
                 fi
               else
                 echo "⏭️ No se han detectado cambios en código Apex. Saltando la ejecución de unit tests."
-                echo "📦 Validando únicamente el despliegue de metadatos..."
+                echo "📦 Validando únicamente el despliegue de metadatos del Delta..."
                 
-                # Guardamos el estado para el resumen
                 echo "TEST_STATUS=NO_APEX" >> $GITHUB_ENV
-                sf project deploy validate --target-org dev-org --source-dir force-app --json > deploy-result.json || true
+                sf project deploy validate --target-org dev-org --source-dir "$SOURCE_DIR" --json > deploy-result.json || true
               fi
 
           - name: Procesar Resumen de Validación y Tests
