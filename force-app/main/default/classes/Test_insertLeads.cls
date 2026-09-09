@@ -5,7 +5,7 @@ public with sharing class Test_insertLeads {
         Lead lead = new Lead();
         lead.FirstName = 'John';
         lead.LastName = 'Doe';
-        lead.Email = [EMAIL_ADDRESS]';
+        lead.Email = 'joel.fernandez@konozca.com';
         insert lead;
 
         Test.startTest();
