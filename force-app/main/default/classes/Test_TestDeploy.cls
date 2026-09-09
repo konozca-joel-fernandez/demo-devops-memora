@@ -6,7 +6,7 @@ private class Test_TestDeploy {
         TestDeploy td = new TestDeploy();
         td.testFunction();
         Test.stopTest();
-        
-        System.assert(true, 'TestDeploy ejecutada correctamente.');
+        System.debug('TEST');
+        System.assert(false, 'TestDeploy ejecutada correctamente.');
     }
 }
