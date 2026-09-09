@@ -1,2 +1,1 @@
-Test_DeleteAccounts
-Test_insertLeads
+Test_TestDeploy
