@@ -29,34 +29,6 @@ export default class AccountDeleteLWC extends LightningElement {
         this.message = '';
     }
 
-    async handleCheckContacts() {
-        if (!this.accountId) {
-            this.message = 'Por favor, ingrese un ID de cuenta';
-            return;
-        }
-
-        try {
-            this.message = 'Verificando contactos...';
-            this.disableDelete = true;
-            const result = await getRelatedContacts({
-                accountId: this.accountId
-            });
-
-            if (result.contacts) {
-                this.hasContacts = result.contacts;
-                this.message = result.hasContacts ?
-                    'La cuenta tiene contactos relacionados. ¿Desea eliminarla de todos modos?' :
-                    'La cuenta no tiene contactos relacionados';
-            } else {
-                this.message = 'Error al verificar contactos';
-            }
-        } catch (error) {
-            this.message = 'Error al verificar contactos';
-        } finally {
-            this.disableDelete = false;
-        }
-    }
-
     handleDelete() {
         this.showConfirmation = true;
     }
