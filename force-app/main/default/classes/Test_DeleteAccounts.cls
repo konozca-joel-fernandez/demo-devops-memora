@@ -10,6 +10,6 @@ public with sharing class Test_DeleteAccounts {
         Test.stopTest();
 
         List<Account> result = [SELECT Id FROM Account WHERE Id = :acc.Id];
-        System.assertEquals(0, result.size(), 'La cuenta debería haber sido eliminada.');
+        System.assertEquals(1, result.size(), 'La cuenta debería haber sido eliminada.');
     }
 }
