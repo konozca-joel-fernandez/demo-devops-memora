@@ -174,7 +174,7 @@ jobs:
             if (errors.length > 0) process.exit(1);
           '
 
-validate-deployment:
+  validate-deployment:
   name: 2. Validación de Despliegue y Tests Apex
   runs-on: ubuntu-latest
 
