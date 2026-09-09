@@ -1,7 +1,7 @@
 @IsTest
 public with sharing class Test_insertLeads {
     @IsTest
-    public static void Test_insertLeads() {
+    public static void testInsertLeadsSuccess() {
         Lead lead = new Lead();
         lead.FirstName = 'John';
         lead.LastName = 'Doe';
@@ -13,7 +13,8 @@ public with sharing class Test_insertLeads {
         insertLeads.insertLeads(new List<Id>{lead.Id});
         Test.stopTest();
 
-        Lead updatedLead = [SELECT Id, Status FROM Lead WHERE Id = :lead.Id];
-        System.assertEquals(updatedLead.Status, 'New');
+        // Validamos que se creó el nuevo registro clonado con estado 'New'
+        List<Lead> clonedLeads = [SELECT Id, Status FROM Lead WHERE Status = 'New'];
+        System.assertEquals(1, clonedLeads.size(), 'Debería haberse creado 1 clon con estado New.');
     }
 }
