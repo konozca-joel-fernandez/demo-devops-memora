@@ -207,29 +207,34 @@ jobs:
           - name: Instalar plugin sfdx-git-delta
             run: echo y | sf plugins install sfdx-git-delta
 
-          # 2. Generar el Delta de la Pull Request
+          # 1. Generar Delta con control de errores
           - name: Generar Delta de metadatos
             run: |
               git config core.autocrlf input
               rm -rf delta
               
-              # 1. Traer rama base y calcular SHA del commit
-              git fetch origin ${{ github.base_ref }}
-              BASE_SHA=$(git merge-base origin/${{ github.base_ref }} HEAD)
-              echo "📌 SHA base para el Delta: $BASE_SHA"
+              # Traer la rama base
+              git fetch origin ${{ github.base_ref }} || true
               
-              # 2. Generar el delta usando el SHA exacto
-              sf sgd source delta --to HEAD --from $BASE_SHA --output-dir delta/
+              # Obtener SHA base
+              BASE_SHA=$(git merge-base origin/${{ github.base_ref }} HEAD || echo "")
+              
+              if [ -n "$BASE_SHA" ]; then
+                echo "📌 SHA base para el Delta: $BASE_SHA"
+                sf sgd source delta --to HEAD --from "$BASE_SHA" -o delta/ || true
+              else
+                echo "⚠️ No se pudo obtener el SHA base. Se usará la carpeta completa."
+              fi
               
               echo "📂 Archivos aislados en la carpeta Delta:"
-              find delta/ -type f || echo "⚠️ La carpeta delta no se creó"
+              find delta/ -type f || echo "Delta no generado"
 
-          # 3. Validar Metadatos y Tests en Salesforce
+          # 2. Validar Metadatos y Tests en Salesforce
           - name: Validar Metadatos y Ejecutar Tests (Dry-Run)
             run: |
               APEX_CHANGED=$(git diff --name-only origin/${{ github.base_ref }}...HEAD | grep -iE '\.cls$|\.trigger$' || true)
 
-              # Si el Delta se ha generado correctamente, lo usamos. Si no, force-app.
+              # Usar delta/force-app solo si existe y tiene contenido; si no, volver a force-app
               SOURCE_DIR="force-app"
               if [ -d "delta/force-app" ]; then
                 SOURCE_DIR="delta/force-app"
@@ -243,7 +248,7 @@ jobs:
                 
                 if [ -f "tests_to_run.txt" ] && [ -s "tests_to_run.txt" ]; then
                   TESTS=$(cat tests_to_run.txt | tr '\r\n' ' ' | xargs)
-                  echo "🧪 Validando Delta y ejecutando tests especificados: $TESTS"
+                  echo "🧪 Validando y ejecutando tests especificados: $TESTS"
                   
                   echo "TEST_STATUS=EXECUTED" >> $GITHUB_ENV
                   echo "EXECUTED_TESTS=$TESTS" >> $GITHUB_ENV
