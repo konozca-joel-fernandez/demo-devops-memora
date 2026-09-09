@@ -245,7 +245,9 @@ jobs:
 
           git config core.autocrlf input
 
+          # Limpiar y volver a crear la carpeta Delta
           rm -rf delta
+          mkdir -p delta
 
           echo "🔄 Obteniendo rama base: ${{ github.base_ref }}"
           git fetch origin ${{ github.base_ref }}
@@ -260,9 +262,7 @@ jobs:
 
           echo "📌 SHA base para el Delta: $BASE_SHA"
 
-          # Generar:
-          # - package.xml con los componentes añadidos/modificados
-          # - delta/force-app con los ficheros modificados
+          # Generar package.xml y copia física de los ficheros modificados
           sf sgd source delta \
             --to HEAD \
             --from "$BASE_SHA" \
