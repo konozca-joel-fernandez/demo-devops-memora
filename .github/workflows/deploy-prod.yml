@@ -72,3 +72,67 @@ jobs:
           else
             echo "⏭️ No hay cambios de metadatos en el Delta."
           fi
+  
+  deploy-hotfix:
+    name: Despliegue a Org Hotfix (HOTFIX)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout del repositorio
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Instalar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Instalar Salesforce CLI y Plugin Delta
+        run: |
+          npm install --global @salesforce/cli
+          echo y | sf plugins install sfdx-git-delta
+
+      - name: Autenticación en Salesforce (HOTFIX)
+        env:
+          KEY_HOTFIX: ${{ secrets.SF_HOTFIX_SERVER_KEY }}
+        run: |
+          echo "$KEY_HOTFIX" > server.key
+          sf org login jwt \
+            --client-id ${{ secrets.SF_HOTFIX_CLIENT_ID }} \
+            --jwt-key-file server.key \
+            --username ${{ secrets.SF_HOTFIX_USERNAME }} \
+            --set-default \
+            --alias hotfix-org \
+            --instance-url https://test.salesforce.com
+          rm -f server.key
+
+      - name: Generar Delta del Merge
+        run: |
+          git config core.autocrlf input
+          rm -rf delta
+          mkdir -p delta
+          
+          sf sgd source delta \
+            --from "${{ github.event.before }}" \
+            --to "${{ github.sha }}" \
+            --generate-delta \
+            --output-dir delta
+
+      - name: Desplegar a Hotfix
+        run: |
+          DEPLOY_ARGS=(
+            --target-org hotfix-org
+            --manifest delta/package/package.xml
+            --test-level NoTestRun
+          )
+
+          if [ -f "delta/destructiveChanges/destructiveChanges.xml" ] && grep -q "<types>" delta/destructiveChanges/destructiveChanges.xml; then
+            DEPLOY_ARGS+=(--post-destructive-changes delta/destructiveChanges/destructiveChanges.xml)
+          fi
+
+          if grep -q "<types>" delta/package/package.xml; then
+            echo "🚀 Desplegando Delta en Hotfix..."
+            sf project deploy start "${DEPLOY_ARGS[@]}" --json > deploy-result-hotfix.json || true
+          else
+            echo "⏭️ No hay cambios de metadatos en el Delta."
+          fi
