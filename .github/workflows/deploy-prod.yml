@@ -1,0 +1,74 @@
+name: CD - Despliegue a Prod
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'force-app/**'
+
+jobs:
+  deploy-prod:
+    name: Despliegue en Entorno Prod
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout del repositorio
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Instalar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Instalar Salesforce CLI y Plugin Delta
+        run: |
+          npm install --global @salesforce/cli
+          echo y | sf plugins install sfdx-git-delta
+
+      - name: Autenticación en Salesforce (PROD)
+        env:
+          KEY_PROD: ${{ secrets.SF_PROD_SERVER_KEY }}
+        run: |
+          echo "$KEY_PROD" > server.key
+          sf org login jwt \
+            --client-id ${{ secrets.SF_PROD_CLIENT_ID }} \
+            --jwt-key-file server.key \
+            --username ${{ secrets.SF_PROD_USERNAME }} \
+            --set-default \
+            --alias prod-org \
+            --instance-url https://login.salesforce.com
+          rm -f server.key
+
+      - name: Generar Delta del Merge
+        run: |
+          git config core.autocrlf input
+          rm -rf delta
+          mkdir -p delta
+          
+          sf sgd source delta \
+            --from "${{ github.event.before }}" \
+            --to "${{ github.sha }}" \
+            --generate-delta \
+            --output-dir delta
+
+      - name: Desplegar a Producción (RunLocalTests)
+        run: |
+          DEPLOY_ARGS=(
+            --target-org prod-org
+            --manifest delta/package/package.xml
+            --test-level RunLocalTests
+          )
+
+          if [ -f "delta/destructiveChanges/destructiveChanges.xml" ] && grep -q "<types>" delta/destructiveChanges/destructiveChanges.xml; then
+            DEPLOY_ARGS+=(--post-destructive-changes delta/destructiveChanges/destructiveChanges.xml)
+          fi
+
+          if grep -q "<types>" delta/package/package.xml; then
+            echo "🚀 Desplegando Delta en Producción y corriendo todos los tests..."
+            sf project deploy start "${DEPLOY_ARGS[@]}" --json > deploy-result.json || true
+          else
+            echo "⏭️ No hay cambios de metadatos en el Delta."
+          fi

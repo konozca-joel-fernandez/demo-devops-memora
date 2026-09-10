@@ -215,7 +215,12 @@ jobs:
 
       - name: Configurar Credenciales según Rama Destino
         run: |
-          if [ "${{ github.base_ref }}" = "pre" ] || [ "${{ github.base_ref }}" = "preprod" ]; then
+          if [ "${{ github.base_ref }}" = "main" ]; then
+            echo "🎯 Entorno detectado: PRODUCCIÓN"
+            echo "SF_CLIENT_ID=${{ secrets.SF_PROD_CLIENT_ID }}" >> $GITHUB_ENV
+            echo "SF_USERNAME=${{ secrets.SF_PROD_USERNAME }}" >> $GITHUB_ENV
+            echo "TARGET_ALIAS=prod-org" >> $GITHUB_ENV
+          elif [ "${{ github.base_ref }}" = "pre" ] || [ "${{ github.base_ref }}" = "preprod" ]; then
             echo "🎯 Entorno detectado: PREPRODUCCIÓN"
             echo "SF_CLIENT_ID=${{ secrets.SF_PRE_CLIENT_ID }}" >> $GITHUB_ENV
             echo "SF_USERNAME=${{ secrets.SF_PRE_USERNAME }}" >> $GITHUB_ENV
@@ -343,12 +348,27 @@ jobs:
             exit 0
           fi
 
+          # ----------------------------------------------------------
+          # CASO 1: RAMA DESTINO ES MAIN (PRODUCCIÓN)
+          # ----------------------------------------------------------
+
+          if [ "${{ github.base_ref }}" = "main" ]; then
+
+            echo "🚀 PR a MAIN detectada: Validando Delta y ejecutando TODOS los tests locales de la Org (RunLocalTests)..."
+            echo "TEST_STATUS=EXECUTED_ALL" >> $GITHUB_ENV
+
+            sf project deploy start \
+              --dry-run \
+              --target-org "$TARGET_ALIAS" \
+              --manifest delta/package/package.xml \
+              --test-level RunLocalTests \
+              --json > deploy-result.json || true
 
           # ----------------------------------------------------------
-          # EXISTEN CAMBIOS APEX
+          # EXISTEN CAMBIOS APEX (DEV / PRE)
           # ----------------------------------------------------------
 
-          if [ -n "$APEX_CHANGED" ]; then
+          elif [ -n "$APEX_CHANGED" ]; then
 
             echo "🔄 Cambios detectados en código Apex:"
             echo "$APEX_CHANGED"
@@ -429,7 +449,7 @@ jobs:
 
 
           # ----------------------------------------------------------
-          # NO EXISTEN CAMBIOS APEX
+          # NO EXISTEN CAMBIOS APEX (DEV/PRE)
           # ----------------------------------------------------------
 
           else
@@ -634,7 +654,14 @@ jobs:
 
             if (!hasErrors) {
 
-              if (testStatus === "EXECUTED") {
+              if (testStatus === "EXECUTED_ALL") {
+
+                summary += "✅ **¡Validación en Producción completada con éxito!**\n\n";
+                summary += "🧪 **Se han ejecutado y superado **TODOS** los tests locales de la Org.\n\n";
+
+              }
+
+              else if (testStatus === "EXECUTED") {
 
                 summary += "✅ **¡Validación de metadatos y Tests Apex completados con éxito!**\n\n";
 
