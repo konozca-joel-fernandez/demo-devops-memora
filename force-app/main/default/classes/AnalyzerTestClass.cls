@@ -16,7 +16,7 @@ public with sharing class AnalyzerTestClass {
 
         // 3. Iteración en memoria sobre los registros recuperados
         for (Account acc : accs) {
-            System.debug('Procesando cuenta: ' + acc.Name);
+            System.debug('Procesando cuenta test Joel 10/9: ' + acc.Name);
             nameSet.add(acc.Name);
         }
     }
