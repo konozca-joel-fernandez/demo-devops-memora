@@ -209,24 +209,34 @@ jobs:
       # 3. AUTENTICACIÓN SALESFORCE (DINÁMICA)
       # ============================================================
 
+      # ============================================================
+      # 3. AUTENTICACIÓN SALESFORCE (DINÁMICA CORREGIDA)
+      # ============================================================
+
       - name: Configurar Credenciales según Rama Destino
         run: |
-          if [ "${{ github.base_ref }}" = "preprod" ]; then
+          if [ "${{ github.base_ref }}" = "pre" ] || [ "${{ github.base_ref }}" = "preprod" ]; then
             echo "🎯 Entorno detectado: PREPRODUCCIÓN"
             echo "SF_CLIENT_ID=${{ secrets.SF_PRE_CLIENT_ID }}" >> $GITHUB_ENV
             echo "SF_USERNAME=${{ secrets.SF_PRE_USERNAME }}" >> $GITHUB_ENV
-            echo "SF_SERVER_KEY=${{ secrets.SF_PRE_SERVER_KEY }}" >> $GITHUB_ENV
             echo "TARGET_ALIAS=pre-org" >> $GITHUB_ENV
           else
             echo "🎯 Entorno detectado: DEV"
             echo "SF_CLIENT_ID=${{ secrets.SF_DEV_CLIENT_ID }}" >> $GITHUB_ENV
             echo "SF_USERNAME=${{ secrets.SF_DEV_USERNAME }}" >> $GITHUB_ENV
-            echo "SF_SERVER_KEY=${{ secrets.SF_DEV_SERVER_KEY }}" >> $GITHUB_ENV
             echo "TARGET_ALIAS=dev-org" >> $GITHUB_ENV
           fi
 
       - name: Reconstruir llave privada (server.key)
-        run: echo "$SF_SERVER_KEY" > server.key
+        env:
+          KEY_PRE: ${{ secrets.SF_PRE_SERVER_KEY }}
+          KEY_DEV: ${{ secrets.SF_DEV_SERVER_KEY }}
+        run: |
+          if [ "$TARGET_ALIAS" = "pre-org" ]; then
+            echo "$KEY_PRE" > server.key
+          else
+            echo "$KEY_DEV" > server.key
+          fi
 
       - name: Autenticación en Salesforce
         run: |
