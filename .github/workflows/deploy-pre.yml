@@ -1,4 +1,4 @@
-name: CD - Despliegue a Dev
+name: CD - Despliegue a Preprod
 
 on:
   push:
@@ -9,8 +9,8 @@ on:
       - 'tests_to_run.txt'
 
 jobs:
-  deploy-dev:
-    name: Despliegue en Entorno Dev
+  deploy-pre:
+    name: Despliegue en Entorno Preprod
     runs-on: ubuntu-latest
 
     steps:
