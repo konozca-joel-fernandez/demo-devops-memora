@@ -9,6 +9,7 @@ public with sharing class insertLeads {
             for (Lead lead : leadsToInsert) {
                 Lead newLead = lead.clone(false, true, false, false);
                 newLead.Status = 'New';
+                newLead.Company = 'Konozca';
                 newLeads.add(newLead);
             }
             
