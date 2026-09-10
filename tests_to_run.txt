@@ -1,1 +1,4 @@
 Test_DeleteAccounts
+Test_AnalyzerTestClass
+Test_insertLeads
+Test_TestDeploy
