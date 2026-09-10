@@ -1,0 +1,843 @@
+name: CI - Validación de PR y Calidad de Código
+
+on:
+  pull_request:
+    branches:
+      - dev
+      - preprod
+      - main
+    paths:
+      - 'force-app/**'
+      - 'tests_to_run.txt'
+
+jobs:
+  code-analyzer:
+    name: 1. Salesforce Code Analyzer
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install Salesforce CLI
+        run: npm install --global @salesforce/cli
+
+      - name: Install Salesforce Code Analyzer
+        run: sf plugins install code-analyzer
+
+      - name: Ejecutar Salesforce Code Analyzer
+        continue-on-error: true
+        run: |
+          # 1. Buscamos archivos Añadidos (A) o Modificados (M) ignorando los borrados
+          # y filtramos solo por las extensiones que lee el Code Analyzer
+          CHANGED_FILES=$(git diff --name-only --diff-filter=AM origin/${{ github.base_ref }}...HEAD | grep -iE '\.(cls|trigger|js|ts|html|page|cmp)$' || true)
+
+          if [ -z "$CHANGED_FILES" ]; then
+            echo "⏭️ No se han modificado archivos analizables en esta PR. Saltando el escaneo."
+            
+            # Avisamos a Node.js de que no hubo ejecución
+            echo "SKIP_ANALYZER=true" >> $GITHUB_ENV
+            
+            # Creamos un JSON vacío para que el script de Node no falle
+            echo '[]' > code-analyzer-results.json
+          else
+            # 2. Convertimos la lista de archivos en un texto separado por comas
+            TARGETS=$(echo "$CHANGED_FILES" | tr '\n' ',' | sed 's/,$//')
+            echo "🔍 Analizando únicamente los siguientes archivos:"
+            echo "$TARGETS"
+            
+            # 3. Lanzamos el Analyzer SOLO contra los archivos modificados (--target)
+            sf code-analyzer run --target "$TARGETS" --severity-threshold 2 --output-file code-analyzer-results.json
+          fi
+
+      - name: Procesar Resumen de Calidad
+        if: always()
+        run: |
+          node -e '
+            const fs = require("fs");
+            
+            // --- NUEVO BLOQUE: Interceptar si se saltó el escaneo ---
+            if (process.env.SKIP_ANALYZER === "true") {
+              let summary = "## 🛡️ Resultado de Salesforce Code Analyzer\n\n";
+              summary += "⏭️ **Escaneo omitido.** *No se han detectado modificaciones en archivos analizables (`.cls`, `.js`, `.html`, etc.) en esta PR.*\n";
+              fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary);
+              process.exit(0);
+            }
+            // --------------------------------------------------------
+
+            if (!fs.existsSync("code-analyzer-results.json")) process.exit(0);
+            
+            let rawData;
+            try {
+              rawData = JSON.parse(fs.readFileSync("code-analyzer-results.json", "utf8"));
+            } catch(e) {
+              process.exit(0);
+            }
+
+            function getFile(v, parent) {
+              let f = v.fileName || v.file || v.path || v.resource;
+              if (!f && v.location) f = v.location.file || v.location.fileName || v.location.path;
+              if (!f && v.locations && v.locations[0]) f = v.locations[0].file || v.locations[0].fileName || v.locations[0].path;
+              if (!f && parent) f = parent.fileName || parent.file || parent.path;
+              if (!f) f = "N/A";
+              return f.includes("force-app") ? "force-app" + f.split("force-app")[1] : f;
+            }
+
+            function getLine(v) {
+              let l = v.line || v.startLine || v.lineNumber;
+              if (!l && v.location) l = v.location.line || v.location.startLine;
+              if (!l && v.locations && v.locations[0]) {
+                const loc = v.locations[0];
+                l = loc.line || loc.startLine || loc.lineNumber || (loc.lineRange && loc.lineRange.start && loc.lineRange.start.line);
+              }
+              return Number(l) || 1;
+            }
+
+            let violations = [];
+
+            function processItem(v, parent) {
+              violations.push({
+                file: getFile(v, parent),
+                line: getLine(v),
+                rule: v.ruleName || v.rule || "N/A",
+                severity: Number(v.severity) || 3,
+                message: v.message || ""
+              });
+            }
+
+            if (Array.isArray(rawData)) {
+              rawData.forEach(item => {
+                const list = item.violations || item.results || [];
+                if (Array.isArray(list) && list.length > 0) {
+                  list.forEach(v => processItem(v, item));
+                } else if (item.ruleName || item.rule || item.severity) {
+                  processItem(item, null);
+                }
+              });
+            } else if (rawData && typeof rawData === "object") {
+              const list = rawData.violations || rawData.results || rawData.runs || [];
+              if (Array.isArray(list)) {
+                list.forEach(item => {
+                  if (item.violations && Array.isArray(item.violations)) {
+                    item.violations.forEach(v => processItem(v, item));
+                  } else {
+                    processItem(item, null);
+                  }
+                });
+              }
+            }
+
+            const errors = violations.filter(v => v.severity <= 2);
+            const warnings = violations.filter(v => v.severity > 2);
+
+            let summary = "## 🛡️ Resultado de Salesforce Code Analyzer\n\n";
+
+            if (violations.length === 0) {
+              summary += "✅ **¡Código limpio! No se han encontrado violaciones.**\n";
+            } else {
+              summary += `### ⛔ Errores Críticos (Obligatorio Corregir para Aprobar PR): ${errors.length}\n`;
+              if (errors.length > 0) {
+                summary += "| Severidad | Archivo | Línea | Regla | Descripción |\n";
+                summary += "| :--- | :--- | :--- | :--- | :--- |\n";
+                errors.forEach(e => {
+                  const sevStr = e.severity === 1 ? "🔴 Alta" : "🟠 Media";
+                  summary += `| ${sevStr} | \`${e.file}\` | ${e.line} | \`${e.rule}\` | ${e.message} |\n`;
+                });
+              } else {
+                summary += "*No hay errores críticos que bloqueen la PR.*\n";
+              }
+
+              summary += "\n---\n\n";
+
+              summary += `### ⚠️ Advertencias / Warnings (Informativos - No Bloquean): ${warnings.length}\n`;
+              if (warnings.length > 0) {
+                summary += "| Severidad | Archivo | Línea | Regla | Descripción |\n";
+                summary += "| :--- | :--- | :--- | :--- | :--- |\n";
+                warnings.forEach(w => {
+                  const sevStr = w.severity === 3 ? "🟡 Baja" : "⚪ Info";
+                  summary += `| ${sevStr} | \`${w.file}\` | ${w.line} | \`${w.rule}\` | ${w.message} |\n`;
+                });
+              } else {
+                summary += "*No hay advertencias recomendadas.*\n";
+              }
+            }
+
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary);
+
+            if (errors.length > 0) process.exit(1);
+          '
+
+  validate-deployment:
+    name: 2. Validación de Despliegue y Tests Apex
+    runs-on: ubuntu-latest
+
+    steps:
+
+      # ============================================================
+      # 1. CHECKOUT
+      # ============================================================
+
+      # fetch-depth: 0 es necesario para disponer del historial
+      # completo y poder calcular correctamente el delta entre ramas.
+      - name: Checkout del repositorio
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+
+      # ============================================================
+      # 2. SALESFORCE CLI
+      # ============================================================
+
+      - name: Instalar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Instalar Salesforce CLI
+        run: npm install --global @salesforce/cli
+
+
+      # ============================================================
+      # 3. AUTENTICACIÓN SALESFORCE (DINÁMICA)
+      # ============================================================
+
+      # ============================================================
+      # 3. AUTENTICACIÓN SALESFORCE (DINÁMICA CORREGIDA)
+      # ============================================================
+
+      - name: Configurar Credenciales según Rama Destino
+        run: |
+          if [ "${{ github.base_ref }}" = "pre" ] || [ "${{ github.base_ref }}" = "preprod" ]; then
+            echo "🎯 Entorno detectado: PREPRODUCCIÓN"
+            echo "SF_CLIENT_ID=${{ secrets.SF_PRE_CLIENT_ID }}" >> $GITHUB_ENV
+            echo "SF_USERNAME=${{ secrets.SF_PRE_USERNAME }}" >> $GITHUB_ENV
+            echo "TARGET_ALIAS=pre-org" >> $GITHUB_ENV
+          else
+            echo "🎯 Entorno detectado: DEV"
+            echo "SF_CLIENT_ID=${{ secrets.SF_DEV_CLIENT_ID }}" >> $GITHUB_ENV
+            echo "SF_USERNAME=${{ secrets.SF_DEV_USERNAME }}" >> $GITHUB_ENV
+            echo "TARGET_ALIAS=dev-org" >> $GITHUB_ENV
+          fi
+
+      - name: Reconstruir llave privada (server.key)
+        env:
+          KEY_PRE: ${{ secrets.SF_PRE_SERVER_KEY }}
+          KEY_DEV: ${{ secrets.SF_DEV_SERVER_KEY }}
+        run: |
+          if [ "$TARGET_ALIAS" = "pre-org" ]; then
+            echo "$KEY_PRE" > server.key
+          else
+            echo "$KEY_DEV" > server.key
+          fi
+
+      - name: Autenticación en Salesforce
+        run: |
+          sf org login jwt \
+            --client-id "$SF_CLIENT_ID" \
+            --jwt-key-file server.key \
+            --username "$SF_USERNAME" \
+            --set-default \
+            --alias "$TARGET_ALIAS" \
+            --instance-url https://login.salesforce.com
+
+
+      # ============================================================
+      # 4. SFDX GIT DELTA
+      # ============================================================
+
+      - name: Instalar plugin sfdx-git-delta
+        run: echo y | sf plugins install sfdx-git-delta
+
+
+      # ============================================================
+      # 5. GENERAR DELTA
+      # ============================================================
+
+      - name: Generar Delta de metadatos
+        run: |
+          set -e
+
+          git config core.autocrlf input
+
+          # Limpiar y volver a crear la carpeta Delta
+          rm -rf delta
+          mkdir -p delta
+
+          echo "🔄 Obteniendo rama base: ${{ github.base_ref }}"
+          git fetch origin ${{ github.base_ref }}
+
+          # Obtener el punto común entre la feature y la rama base
+          BASE_SHA=$(git merge-base origin/${{ github.base_ref }} HEAD)
+
+          if [ -z "$BASE_SHA" ]; then
+            echo "❌ No se ha podido determinar el SHA base."
+            exit 1
+          fi
+
+          echo "📌 SHA base para el Delta: $BASE_SHA"
+
+          # Generar package.xml y copia física de los ficheros modificados
+          sf sgd source delta \
+            --to HEAD \
+            --from "$BASE_SHA" \
+            --generate-delta \
+            --output-dir delta
+
+          echo ""
+          echo "📂 Archivos generados en Delta:"
+          find delta -type f || true
+
+          echo ""
+          echo "📦 package.xml generado:"
+          cat delta/package/package.xml
+
+          echo ""
+          echo "🔎 Diferencias detectadas por Git:"
+          git diff --name-only origin/${{ github.base_ref }}...HEAD
+
+
+      # ============================================================
+      # 6. VALIDACIÓN SALESFORCE + TESTS
+      # ============================================================
+
+      - name: Validar Metadatos y Ejecutar Tests (Dry-Run)
+        run: |
+
+          # ----------------------------------------------------------
+          # Detectar si se ha modificado código Apex en esta PR
+          # ----------------------------------------------------------
+
+          APEX_CHANGED=$(git diff \
+            --name-only \
+            origin/${{ github.base_ref }}...HEAD \
+            | grep -iE '\.cls$|\.trigger$' || true)
+
+          echo ""
+          echo "📦 Manifest que se validará:"
+          cat delta/package/package.xml
+
+          echo ""
+
+          # ----------------------------------------------------------
+          # Comprobar si el package.xml contiene metadata
+          # ----------------------------------------------------------
+
+          if ! grep -q "<types>" delta/package/package.xml; then
+
+            echo "⏭️ No hay metadata desplegable en el Delta."
+
+            echo "TEST_STATUS=NO_METADATA" >> $GITHUB_ENV
+
+            # Generamos resultado válido para que el paso de resumen
+            # pueda procesarlo.
+            echo '{"status":0,"result":{"details":{}}}' > deploy-result.json
+
+            exit 0
+          fi
+
+
+          # ----------------------------------------------------------
+          # EXISTEN CAMBIOS APEX
+          # ----------------------------------------------------------
+
+          if [ -n "$APEX_CHANGED" ]; then
+
+            echo "🔄 Cambios detectados en código Apex:"
+            echo "$APEX_CHANGED"
+
+            echo ""
+
+            # --------------------------------------------------------
+            # Comprobar tests_to_run.txt
+            # --------------------------------------------------------
+
+            if [ -f "tests_to_run.txt" ] && [ -s "tests_to_run.txt" ]; then
+
+              # Leer tests ignorando líneas vacías y comentarios
+              mapfile -t TEST_ARRAY < <(
+                sed 's/\r$//' tests_to_run.txt \
+                | grep -vE '^[[:space:]]*(#|$)'
+              )
+
+              if [ ${#TEST_ARRAY[@]} -eq 0 ]; then
+                echo "❌ tests_to_run.txt no contiene clases de test válidas."
+                echo "TEST_STATUS=NO_TESTS_FILE" >> $GITHUB_ENV
+                exit 1
+              fi
+
+              # Construir argumentos:
+              # --tests Test1 --tests Test2 ...
+              TEST_ARGS=()
+
+              for TEST in "${TEST_ARRAY[@]}"; do
+                TEST_ARGS+=(--tests "$TEST")
+              done
+
+              # String únicamente para mostrar posteriormente
+              TESTS_DISPLAY=$(printf '%s ' "${TEST_ARRAY[@]}" | xargs)
+
+              echo "🧪 Tests que se ejecutarán:"
+              for TEST in "${TEST_ARRAY[@]}"; do
+                echo "   - $TEST"
+              done
+
+              echo "TEST_STATUS=EXECUTED" >> $GITHUB_ENV
+              echo "EXECUTED_TESTS=$TESTS_DISPLAY" >> $GITHUB_ENV
+
+
+              # ------------------------------------------------------
+              # VALIDACIÓN DEL DELTA
+              #
+              # MUY IMPORTANTE:
+              #
+              # --manifest hace que Salesforce valide únicamente
+              # los componentes incluidos en package.xml.
+              #
+              # RunSpecifiedTests ejecuta exclusivamente los tests
+              # indicados en tests_to_run.txt.
+              # ------------------------------------------------------
+
+              sf project deploy start \
+                --dry-run \
+                --target-org "$TARGET_ALIAS" \
+                --manifest delta/package/package.xml \
+                --test-level RunSpecifiedTests \
+                "${TEST_ARGS[@]}" \
+                --json > deploy-result.json || true
+
+            else
+
+              # ------------------------------------------------------
+              # Si hay Apex modificado, exigimos que se indiquen tests.
+              # ------------------------------------------------------
+
+              echo "❌ Se ha modificado código Apex pero tests_to_run.txt está vacío o no existe."
+
+              echo "TEST_STATUS=NO_TESTS_FILE" >> $GITHUB_ENV
+
+              exit 1
+
+            fi
+
+
+          # ----------------------------------------------------------
+          # NO EXISTEN CAMBIOS APEX
+          # ----------------------------------------------------------
+
+          else
+
+            echo "⏭️ No se han detectado cambios en código Apex."
+            echo "⏭️ Se validará únicamente la metadata del Delta."
+
+            echo "TEST_STATUS=NO_APEX" >> $GITHUB_ENV
+
+            sf project deploy start \
+              --dry-run \
+              --target-org "$TARGET_ALIAS" \
+              --manifest delta/package/package.xml \
+              --json > deploy-result.json || true
+
+          fi
+
+      - name: Mostrar resultado completo de Salesforce
+        if: always()
+        run: |
+          echo "========== deploy-result.json =========="
+          if [ -f "deploy-result.json" ]; then
+            cat deploy-result.json
+          else
+            echo "deploy-result.json no existe"
+          fi
+
+      # ============================================================
+      # 7. GENERAR RESUMEN
+      # ============================================================
+
+      - name: Procesar Resumen de Validación y Tests
+        if: always()
+        run: |
+          node -e '
+            const fs = require("fs");
+
+            let summary = "## 🧪 Resultado de Validación en Salesforce\n\n";
+
+            const testStatus = process.env.TEST_STATUS || "UNKNOWN";
+
+            // =====================================================
+            // APEX MODIFICADO SIN TESTS
+            // =====================================================
+
+            if (testStatus === "NO_TESTS_FILE") {
+
+              summary += "❌ **Validación bloqueada.**\n\n";
+              summary += "Se ha modificado código Apex, pero el fichero `tests_to_run.txt` está vacío o no contiene clases de test válidas.\n\n";
+              summary += "Es necesario indicar los tests que deben validar el código modificado.\n";
+
+              fs.appendFileSync(
+                process.env.GITHUB_STEP_SUMMARY,
+                summary
+              );
+
+              process.exit(1);
+            }
+
+
+            // =====================================================
+            // COMPROBAR JSON
+            // =====================================================
+
+            if (!fs.existsSync("deploy-result.json")) {
+
+              summary += "❌ **Error Crítico:** No se pudo generar el archivo de resultados de Salesforce CLI.\n";
+
+              fs.appendFileSync(
+                process.env.GITHUB_STEP_SUMMARY,
+                summary
+              );
+
+              process.exit(1);
+            }
+
+
+            let rawData;
+
+            try {
+
+              rawData = JSON.parse(
+                fs.readFileSync("deploy-result.json", "utf8")
+              );
+
+            } catch(e) {
+
+              summary += "❌ **Error:** No se pudo procesar la respuesta JSON de Salesforce.\n\n";
+              summary += `Detalle técnico: ${e.message}\n`;
+
+              fs.appendFileSync(
+                process.env.GITHUB_STEP_SUMMARY,
+                summary
+              );
+
+              process.exit(1);
+            }
+
+
+            // =====================================================
+            // DATOS GENERALES
+            // =====================================================
+
+            const cliStatus = rawData.status;
+
+            const res = rawData.result || {};
+
+            const details = res.details || {};
+
+            const runTestResult =
+              details.runTestResult || {};
+
+
+            // =====================================================
+            // COMPONENT FAILURES
+            // =====================================================
+
+            const compFailures =
+              details.componentFailures
+                ? (
+                    Array.isArray(details.componentFailures)
+                      ? details.componentFailures
+                      : [details.componentFailures]
+                  )
+                : [];
+
+
+            // =====================================================
+            // TEST FAILURES
+            // =====================================================
+
+            const testFailures =
+              runTestResult.failures
+                ? (
+                    Array.isArray(runTestResult.failures)
+                      ? runTestResult.failures
+                      : [runTestResult.failures]
+                  )
+                : [];
+
+
+            // =====================================================
+            // CODE COVERAGE WARNINGS
+            // =====================================================
+
+            const coverageWarnings =
+              runTestResult.codeCoverageWarnings
+                ? (
+                    Array.isArray(runTestResult.codeCoverageWarnings)
+                      ? runTestResult.codeCoverageWarnings
+                      : [runTestResult.codeCoverageWarnings]
+                  )
+                : [];
+
+
+            // =====================================================
+            // FLOW COVERAGE WARNINGS
+            // =====================================================
+
+            const flowCoverageWarnings =
+              runTestResult.flowCoverageWarnings
+                ? (
+                    Array.isArray(runTestResult.flowCoverageWarnings)
+                      ? runTestResult.flowCoverageWarnings
+                      : [runTestResult.flowCoverageWarnings]
+                  )
+                : [];
+
+
+            // =====================================================
+            // DETERMINAR RESULTADO REAL DEL DEPLOY
+            // =====================================================
+
+            const deployFailed =
+              cliStatus !== 0 ||
+              res.success === false ||
+              res.status === "Failed";
+
+
+            let hasErrors =
+              deployFailed ||
+              compFailures.length > 0 ||
+              testFailures.length > 0;
+
+
+            // =====================================================
+            // INFORMACIÓN DEL DEPLOY
+            // =====================================================
+
+            if (res.id) {
+              summary += `**Deployment ID:** \`${res.id}\`\n\n`;
+            }
+
+            if (res.status) {
+              summary += `**Estado Salesforce:** \`${res.status}\`\n\n`;
+            }
+
+
+            // =====================================================
+            // RESULTADO CORRECTO
+            // =====================================================
+
+            if (!hasErrors) {
+
+              if (testStatus === "EXECUTED") {
+
+                summary += "✅ **¡Validación de metadatos y Tests Apex completados con éxito!**\n\n";
+
+                const executedTests =
+                  process.env.EXECUTED_TESTS || "";
+
+                if (executedTests) {
+
+                  summary += "### 🧪 Clases de Test Ejecutadas\n";
+
+                  executedTests
+                    .split(" ")
+                    .filter(Boolean)
+                    .forEach(t => {
+
+                      summary += `- \`${t}\`\n`;
+
+                    });
+
+                  summary += "\n";
+                }
+
+
+              } else if (testStatus === "NO_APEX") {
+
+                summary += "✅ **¡Validación de metadatos completada con éxito!**\n\n";
+
+                summary += "⏭️ Se ha omitido la ejecución de Unit Tests porque no se detectaron modificaciones en archivos Apex (`.cls` o `.trigger`).\n";
+
+
+              } else if (testStatus === "NO_METADATA") {
+
+                summary += "✅ **No existen cambios de metadata Salesforce que validar.**\n";
+
+
+              } else {
+
+                summary += "✅ **¡Validación completada con éxito en Salesforce!**\n";
+
+              }
+
+            } else {
+
+              // ===================================================
+              // ERROR GENERAL
+              // ===================================================
+
+              const specificErrorsFound =
+                compFailures.length > 0 ||
+                testFailures.length > 0 ||
+                coverageWarnings.length > 0 ||
+                flowCoverageWarnings.length > 0;
+
+
+              if (!specificErrorsFound) {
+
+                const topError =
+                  rawData.message ||
+                  rawData.errorMessage ||
+                  res.errorMessage ||
+                  res.message ||
+                  `Salesforce ha devuelto estado ${res.status || cliStatus}.`;
+
+                summary += "### 🛑 Error General de Despliegue / CLI\n\n";
+
+                summary += `> **Detalle del fallo:** ${topError}\n\n`;
+              }
+
+
+              // ===================================================
+              // ERRORES DE COMPONENTES
+              // ===================================================
+
+              if (compFailures.length > 0) {
+
+                summary += `### ❌ Errores de Compilación / Metadatos (${compFailures.length})\n\n`;
+
+                summary += "| Componente | Línea | Tipo | Problema |\n";
+                summary += "| :--- | :--- | :--- | :--- |\n";
+
+
+                compFailures.forEach(f => {
+
+                  const file =
+                    f.fileName ||
+                    f.fullName ||
+                    "N/A";
+
+                  const line =
+                    f.lineNumber ||
+                    "-";
+
+                  const type =
+                    f.problemType ||
+                    f.componentType ||
+                    "Error";
+
+                  const problem =
+                    (f.problem || f.error || "")
+                      .replace(/\n/g, "<br>");
+
+                  summary += `| \`${file}\` | ${line} | ${type} | ${problem} |\n`;
+
+                });
+
+                summary += "\n";
+              }
+
+
+              // ===================================================
+              // ERRORES DE TEST
+              // ===================================================
+
+              if (testFailures.length > 0) {
+
+                summary += `### 💥 Errores en Tests Apex (${testFailures.length})\n\n`;
+
+                summary += "| Clase Test | Método | Mensaje |\n";
+                summary += "| :--- | :--- | :--- |\n";
+
+
+                testFailures.forEach(t => {
+
+                  const cls =
+                    t.name ||
+                    "N/A";
+
+                  const method =
+                    t.methodName ||
+                    "N/A";
+
+                  const msg =
+                    (t.message || "")
+                      .replace(/\n/g, "<br>");
+
+                  summary += `| \`${cls}\` | \`${method}\` | ${msg} |\n`;
+
+                });
+
+                summary += "\n";
+              }
+
+
+              // ===================================================
+              // ERRORES / WARNINGS DE COBERTURA
+              // ===================================================
+
+              if (coverageWarnings.length > 0) {
+
+                summary += `### 📊 Problemas de Cobertura Apex (${coverageWarnings.length})\n\n`;
+
+                summary += "| Clase / Trigger | Problema |\n";
+                summary += "| :--- | :--- |\n";
+
+
+                coverageWarnings.forEach(c => {
+
+                  const name =
+                    c.name ||
+                    "N/A";
+
+                  const msg =
+                    (c.message || "")
+                      .replace(/\n/g, "<br>");
+
+                  summary += `| \`${name}\` | ${msg} |\n`;
+
+                });
+
+                summary += "\n";
+              }
+
+
+              // ===================================================
+              // FLOW COVERAGE
+              // ===================================================
+
+              if (flowCoverageWarnings.length > 0) {
+
+                summary += `### 🌊 Problemas de Cobertura de Flows (${flowCoverageWarnings.length})\n\n`;
+
+                flowCoverageWarnings.forEach(f => {
+
+                  summary += `- ${f.message || JSON.stringify(f)}\n`;
+
+                });
+
+                summary += "\n";
+              }
+
+            }
+
+
+            fs.appendFileSync(
+              process.env.GITHUB_STEP_SUMMARY,
+              summary
+            );
+
+
+            // El comando Salesforce utiliza || true para que podamos
+            // procesar y mostrar el JSON.
+            // El Quality Gate se falla aquí.
+            if (hasErrors) {
+              process.exit(1);
+            }
+          '
