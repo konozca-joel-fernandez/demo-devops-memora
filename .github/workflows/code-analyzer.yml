@@ -206,25 +206,47 @@ jobs:
 
 
       # ============================================================
-      # 3. AUTENTICACIÓN SALESFORCE
+      # 3. AUTENTICACIÓN SALESFORCE (DINÁMICA)
       # ============================================================
 
-      - name: Reconstruir llave privada (server.key)
-        run: echo "${{ secrets.SF_DEV_SERVER_KEY }}" > server.key
+      # ============================================================
+      # 3. AUTENTICACIÓN SALESFORCE (DINÁMICA CORREGIDA)
+      # ============================================================
 
-      - name: Autenticación en Salesforce (Dev)
+      - name: Configurar Credenciales según Rama Destino
+        run: |
+          if [ "${{ github.base_ref }}" = "pre" ] || [ "${{ github.base_ref }}" = "preprod" ]; then
+            echo "🎯 Entorno detectado: PREPRODUCCIÓN"
+            echo "SF_CLIENT_ID=${{ secrets.SF_PRE_CLIENT_ID }}" >> $GITHUB_ENV
+            echo "SF_USERNAME=${{ secrets.SF_PRE_USERNAME }}" >> $GITHUB_ENV
+            echo "TARGET_ALIAS=pre-org" >> $GITHUB_ENV
+          else
+            echo "🎯 Entorno detectado: DEV"
+            echo "SF_CLIENT_ID=${{ secrets.SF_DEV_CLIENT_ID }}" >> $GITHUB_ENV
+            echo "SF_USERNAME=${{ secrets.SF_DEV_USERNAME }}" >> $GITHUB_ENV
+            echo "TARGET_ALIAS=dev-org" >> $GITHUB_ENV
+          fi
+
+      - name: Reconstruir llave privada (server.key)
+        env:
+          KEY_PRE: ${{ secrets.SF_PRE_SERVER_KEY }}
+          KEY_DEV: ${{ secrets.SF_DEV_SERVER_KEY }}
+        run: |
+          if [ "$TARGET_ALIAS" = "pre-org" ]; then
+            echo "$KEY_PRE" > server.key
+          else
+            echo "$KEY_DEV" > server.key
+          fi
+
+      - name: Autenticación en Salesforce
         run: |
           sf org login jwt \
-            --client-id ${{ secrets.SF_DEV_CLIENT_ID }} \
+            --client-id "$SF_CLIENT_ID" \
             --jwt-key-file server.key \
-            --username ${{ secrets.SF_DEV_USERNAME }} \
+            --username "$SF_USERNAME" \
             --set-default \
-            --alias dev-org \
+            --alias "$TARGET_ALIAS" \
             --instance-url https://login.salesforce.com
-
-      - name: Eliminar llave privada por seguridad
-        if: always()
-        run: rm -f server.key
 
 
       # ============================================================
@@ -385,7 +407,7 @@ jobs:
 
               sf project deploy start \
                 --dry-run \
-                --target-org dev-org \
+                --target-org "$TARGET_ALIAS" \
                 --manifest delta/package/package.xml \
                 --test-level RunSpecifiedTests \
                 "${TEST_ARGS[@]}" \
@@ -419,7 +441,7 @@ jobs:
 
             sf project deploy start \
               --dry-run \
-              --target-org dev-org \
+              --target-org "$TARGET_ALIAS" \
               --manifest delta/package/package.xml \
               --json > deploy-result.json || true
 
