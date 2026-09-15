@@ -58,22 +58,35 @@ jobs:
 
       - name: Desplegar a Producción (RunLocalTests)
         run: |
+          PACKAGE_HAS_CHANGES=false
+          DESTRUCTIVE_HAS_CHANGES=false
+
+          if grep -q "<types>" delta/package/package.xml; then
+            PACKAGE_HAS_CHANGES=true
+          fi
+
+          if [ -f "delta/destructiveChanges/destructiveChanges.xml" ] && grep -q "<types>" delta/destructiveChanges/destructiveChanges.xml; then
+            DESTRUCTIVE_HAS_CHANGES=true
+          fi
+
+          if [ "$PACKAGE_HAS_CHANGES" = false ] && [ "$DESTRUCTIVE_HAS_CHANGES" = false ]; then
+            echo "⏭️ No hay cambios de metadatos ni eliminaciones en el Delta."
+            exit 0
+          fi
+
           DEPLOY_ARGS=(
             --target-org prod-org
             --manifest delta/package/package.xml
             --test-level RunLocalTests
           )
 
-          if [ -f "delta/destructiveChanges/destructiveChanges.xml" ] && grep -q "<types>" delta/destructiveChanges/destructiveChanges.xml; then
-            DEPLOY_ARGS+=(--post-destructiveChanges delta/destructiveChanges/destructiveChanges.xml)
+          if [ "$DESTRUCTIVE_HAS_CHANGES" = true ]; then
+            echo "🗑️ Se han detectado componentes eliminados para Producción."
+            DEPLOY_ARGS+=(--post-destructive-changes delta/destructiveChanges/destructiveChanges.xml)
           fi
 
-          if grep -q "<types>" delta/package/package.xml; then
-            echo "🚀 Desplegando Delta en Producción..."
-            sf project deploy start "${DEPLOY_ARGS[@]}" --json > deploy-result.json || true
-          else
-            echo "⏭️ No hay cambios de metadatos en el Delta."
-          fi
+          echo "🚀 Desplegando Delta en Producción..."
+          sf project deploy start "${DEPLOY_ARGS[@]}" --json > deploy-result.json || true
 
   # ============================================================
   # JOB 2: HOTFIX (SOLO SI EL MERGE NO VIENE DE HOTFIX/*)
