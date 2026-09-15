@@ -82,7 +82,7 @@ jobs:
 
           if [ "$DESTRUCTIVE_HAS_CHANGES" = true ]; then
             echo "🗑️ Se han detectado componentes eliminados para Producción."
-            DEPLOY_ARGS+=(--post-destructive-changes delta/destructiveChanges/destructiveChanges.xml)
+            DEPLOY_ARGS+=(--pre-destructive-changes delta/destructiveChanges/destructiveChanges.xml)
           fi
 
           echo "🚀 Desplegando Delta en Producción..."
