@@ -144,69 +144,47 @@ jobs:
           fi
 
   # ============================================================
-  # JOB 3: BACKPORT A DEV (SOLO SI EL MERGE VIENE DE HOTFIX/*)
+  # JOB 3: BACKPORT A DEV (PR DESDE LA RAMA HOTFIX)
   # ============================================================
-  deploy-dev:
-    name: 2. Backport a Entorno de Desarrollo (DEV)
+  backport-dev:
+    name: 3. Backport a DEV (PR desde Hotfix)
     if: "contains(github.event.head_commit.message, 'hotfix/')"
     runs-on: ubuntu-latest
+    
+    permissions:
+      contents: write
+      pull-requests: write
+
     steps:
       - name: Checkout del repositorio
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Instalar Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
-      - name: Instalar Salesforce CLI y Plugin Delta
-        run: |
-          npm install --global @salesforce/cli
-          echo y | sf plugins install sfdx-git-delta
-
-      - name: Autenticación en Salesforce (DEV)
+      - name: Extraer rama Hotfix y crear PR hacia DEV
         env:
-          KEY_DEV: ${{ secrets.SF_DEV_SERVER_KEY }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "$KEY_DEV" > server.key
-          sf org login jwt \
-            --client-id ${{ secrets.SF_DEV_CLIENT_ID }} \
-            --jwt-key-file server.key \
-            --username ${{ secrets.SF_DEV_USERNAME }} \
-            --set-default \
-            --alias dev-org \
-            --instance-url https://login.salesforce.com
-          rm -f server.key
+          # Detectar el nombre de la rama hotfix/xxx en el mensaje del commit
+          HOTFIX_BRANCH=$(echo "${{ github.event.head_commit.message }}" | grep -oE 'hotfix/[a-zA-Z0-9._-]+' | head -n 1)
 
-      - name: Generar Delta del Merge
-        run: |
-          git config core.autocrlf input
-          rm -rf delta
-          mkdir -p delta
-          
-          sf sgd source delta \
-            --from "${{ github.event.before }}" \
-            --to "${{ github.sha }}" \
-            --generate-delta \
-            --output-dir delta
-
-      - name: Desplegar a DEV
-        run: |
-          DEPLOY_ARGS=(
-            --target-org dev-org
-            --manifest delta/package/package.xml
-            --test-level NoTestRun
-          )
-
-          if [ -f "delta/destructiveChanges/destructiveChanges.xml" ] && grep -q "<types>" delta/destructiveChanges/destructiveChanges.xml; then
-            DEPLOY_ARGS+=(--post-destructiveChanges delta/destructiveChanges/destructiveChanges.xml)
+          if [ -z "$HOTFIX_BRANCH" ]; then
+            echo "❌ No se pudo determinar el nombre de la rama hotfix."
+            exit 1
           fi
 
-          if grep -q "<types>" delta/package/package.xml; then
-            echo "🚀 Sincronizando hotfix urgente en la org de DEV..."
-            sf project deploy start "${DEPLOY_ARGS[@]}" --json > deploy-result-dev.json || true
+          echo "📌 Rama hotfix detectada: $HOTFIX_BRANCH"
+
+          # Comprobar si ya existe una PR abierta desde esa rama específica a dev
+          PR_EXISTS=$(gh pr list --base dev --head "$HOTFIX_BRANCH" --state open --json number --jq 'length')
+          
+          if [ "$PR_EXISTS" -gt "0" ]; then
+            echo "⏭️ Ya existe una Pull Request abierta desde $HOTFIX_BRANCH hacia dev."
           else
-            echo "⏭️ No hay cambios de metadatos en el Delta."
+            echo "🚀 Creando Pull Request desde $HOTFIX_BRANCH a dev..."
+            gh pr create \
+              --base dev \
+              --head "$HOTFIX_BRANCH" \
+              --title "🚀 Backport: $HOTFIX_BRANCH a Dev" \
+              --body "PR automática para integrar las correcciones de \`$HOTFIX_BRANCH\` en la rama \`dev\`."
           fi
