@@ -489,6 +489,31 @@ jobs:
 
             let summary = "## 🧪 Resultado de Validación en Salesforce\n\n";
 
+            // =====================================================
+            // DETECTAR Y MOSTRAR CAMBIOS DESTRUCTIVOS (BORRADOS)
+            // =====================================================
+            const destructivePath = "delta/destructiveChanges/destructiveChanges.xml";
+            if (fs.existsSync(destructivePath)) {
+              const xmlContent = fs.readFileSync(destructivePath, "utf8");
+              if (xmlContent.includes("<types>")) {
+                summary += "### ⚠️ ¡ATENCIÓN! Se eliminarán los siguientes metadatos en la Org:\n\n";
+                summary += "| Tipo de Metadato | Componente / Fichero Borrado |\n";
+                summary += "| :--- | :--- |\n";
+
+                const typeMatches = xmlContent.match(/<types>[\s\S]*?<\/types>/g) || [];
+                typeMatches.forEach(typeBlock => {
+                  const nameMatch = typeBlock.match(/<name>(.*?)<\/name>/);
+                  const typeName = nameMatch ? nameMatch[1] : "Desconocido";
+                  const members = [...typeBlock.matchAll(/<members>(.*?)<\/members>/g)].map(m => m[1]);
+
+                  members.forEach(member => {
+                    summary += `| \`${typeName}\` | 🗑️ \`${member}\` |\n`;
+                  });
+                });
+                summary += "\n---\n\n";
+              }
+            }
+
             const testStatus = process.env.TEST_STATUS || "UNKNOWN";
 
             // =====================================================
