@@ -146,67 +146,38 @@ jobs:
   # ============================================================
   # JOB 3: BACKPORT A DEV (SOLO SI EL MERGE VIENE DE HOTFIX/*)
   # ============================================================
-  deploy-dev:
-    name: 2. Backport a Entorno de Desarrollo (DEV)
+  backport-dev:
+    name: 3. Sincronizar Rama Git (Backport a DEV)
     if: "contains(github.event.head_commit.message, 'hotfix/')"
     runs-on: ubuntu-latest
+    
+    # Necesitamos dar permiso al bot para hacer push
+    permissions:
+      contents: write 
+      pull-requests: write
+
     steps:
       - name: Checkout del repositorio
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Instalar Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
-      - name: Instalar Salesforce CLI y Plugin Delta
+      - name: Configurar Git Bot
         run: |
-          npm install --global @salesforce/cli
-          echo y | sf plugins install sfdx-git-delta
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Autenticación en Salesforce (DEV)
-        env:
-          KEY_DEV: ${{ secrets.SF_DEV_SERVER_KEY }}
+      - name: Merge de MAIN hacia DEV
         run: |
-          echo "$KEY_DEV" > server.key
-          sf org login jwt \
-            --client-id ${{ secrets.SF_DEV_CLIENT_ID }} \
-            --jwt-key-file server.key \
-            --username ${{ secrets.SF_DEV_USERNAME }} \
-            --set-default \
-            --alias dev-org \
-            --instance-url https://login.salesforce.com
-          rm -f server.key
-
-      - name: Generar Delta del Merge
-        run: |
-          git config core.autocrlf input
-          rm -rf delta
-          mkdir -p delta
+          echo "🔄 Actualizando repositorios locales..."
+          git fetch origin dev
+          git fetch origin main
           
-          sf sgd source delta \
-            --from "${{ github.event.before }}" \
-            --to "${{ github.sha }}" \
-            --generate-delta \
-            --output-dir delta
-
-      - name: Desplegar a DEV
-        run: |
-          DEPLOY_ARGS=(
-            --target-org dev-org
-            --manifest delta/package/package.xml
-            --test-level NoTestRun
-          )
-
-          if [ -f "delta/destructiveChanges/destructiveChanges.xml" ] && grep -q "<types>" delta/destructiveChanges/destructiveChanges.xml; then
-            DEPLOY_ARGS+=(--post-destructiveChanges delta/destructiveChanges/destructiveChanges.xml)
-          fi
-
-          if grep -q "<types>" delta/package/package.xml; then
-            echo "🚀 Sincronizando hotfix urgente en la org de DEV..."
-            sf project deploy start "${DEPLOY_ARGS[@]}" --json > deploy-result-dev.json || true
-          else
-            echo "⏭️ No hay cambios de metadatos en el Delta."
-          fi
+          echo "🔀 Cambiando a rama dev..."
+          git checkout dev
+          
+          echo "🔀 Fusionando main (con el hotfix) en dev..."
+          git merge origin/main --no-edit
+          
+          echo "🚀 Subiendo los cambios a origin/dev..."
+          git push origin dev
