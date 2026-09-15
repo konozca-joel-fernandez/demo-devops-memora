@@ -16,7 +16,7 @@ public with sharing class AnalyzerTestClass {
 
         // 3. Iteración en memoria sobre los registros recuperados
         for (Account acc : accs) {
-            System.debug('Procesando cuenta test Joel 15/9 HOTFIX v2: ' + acc.Name);
+            System.debug('Procesando cuenta test Joel 15/9 HOTFIX v3: ' + acc.Name);
             nameSet.add(acc.Name);
         }
     }
